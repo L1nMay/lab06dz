@@ -2,25 +2,27 @@ name: Build and Package
 
 on:
   push:
-    tags: ['v*']  # Триггер только для тегов версий
-  workflow_dispatch:  # Ручной запуск
+    tags: ['v*.*.*']  # Формат тега: v1.0.0
+  workflow_dispatch:
 
 jobs:
-  package:
+  build-packages:
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-22.04, macos-12, windows-2022]
     runs-on: ${{ matrix.os }}
-    
     steps:
-    - uses: actions/checkout@v3
+    - name: Checkout code
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
 
     - name: Install dependencies
       run: |
-        if [[ "${{ runner.os }}" == "Linux" ]]; then
+        if [ "$RUNNER_OS" == "Linux" ]; then
           sudo apt-get update
           sudo apt-get install -y cmake build-essential rpm
-        elif [[ "${{ runner.os }}" == "macOS" ]]; then
+        elif [ "$RUNNER_OS" == "macOS" ]; then
           brew install cmake
         fi
 
@@ -30,42 +32,54 @@ jobs:
     - name: Build
       run: cmake --build build --config Release
 
-    - name: Create packages
+    - name: Generate packages
       run: |
         cd build
-        if [[ "${{ runner.os }}" == "Linux" ]]; then
-          cpack -G "DEB;RPM;TGZ;ZIP"
-        elif [[ "${{ runner.os }}" == "macOS" ]]; then
-          cpack -G "DragNDrop;ZIP"
-        else
-          cpack -G "WIX;ZIP"
-        fi
+        case "$RUNNER_OS" in
+          "Linux")
+            cpack -G "DEB;RPM;TGZ;ZIP"
+            ;;
+          "macOS")
+            cpack -G "DragNDrop;ZIP"
+            ;;
+          "Windows")
+            cpack -G "WIX;ZIP"
+            ;;
+        esac
         mkdir -p ../artifacts
-        mv *.{deb,rpm,tar.gz,zip,dmg,msi} ../artifacts/ || true
+        mv *.{deb,rpm,tar.gz,zip,dmg,msi} ../artifacts/ 2>/dev/null || true
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v3
       with:
         name: packages-${{ runner.os }}
         path: artifacts/*
+        retention-days: 5
 
-  release:
-    needs: package
+  create-release:
+    needs: build-packages
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
-
     steps:
-    - uses: actions/download-artifact@v3
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
       with:
-        path: artifacts
+        path: combined-artifacts
 
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v1
       with:
         files: |
-          artifacts/**/*.deb
-          artifacts/**/*.rpm
-          artifacts/**/*.msi
-          artifacts/**/*.dmg
-          artifacts/**/*.tar.gz
-          artifacts/**/*.zip
+          combined-artifacts/**/*.deb
+          combined-artifacts/**/*.rpm
+          combined-artifacts/**/*.msi
+          combined-artifacts/**/*.dmg
+          combined-artifacts/**/*.tar.gz
+          combined-artifacts/**/*.zip
+        body: |
+          Automated release for ${{ github.ref_name }}
+          Packages:
+          - DEB/RPM (Linux)
+          - DMG (macOS)
+          - MSI (Windows)
+          - Source archives (ZIP/TGZ)
