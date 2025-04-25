@@ -1,4 +1,4 @@
-name: Build and Release
+name: Cross-Platform Build
 
 on:
   push:
@@ -7,7 +7,10 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, windows-2022]
+    runs-on: ${{ matrix.os }}
 
     permissions:
       contents: write
@@ -16,44 +19,68 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4  # Обновлено до v4
+        uses: actions/checkout@v4
 
-      - name: Setup CMake
+      - name: Setup CMake (Windows)
+        if: runner.os == 'Windows'
         uses: actions/setup-cmake@v3
         with:
           cmake-version: '3.28.5'
 
-      - name: Install dependencies
+      - name: Setup CMake (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/setup-cmake@v3
+        with:
+          cmake-version: '3.28.5'
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            libssl-dev \
-            zlib1g-dev
+          sudo apt-get install -y build-essential zlib1g-dev
 
-      - name: Configure project
+      - name: Install dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: choco install -y ninja
+
+      - name: Configure
         run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 
-      - name: Build project
-        run: cmake --build build --parallel $(nproc)
+      - name: Build
+        run: cmake --build build --config Release
 
-      - name: Generate packages
+      - name: Package
         run: |
           cd build
-          cpack -G "TGZ;ZIP;DEB"
+          if [ "$RUNNER_OS" == "Linux" ]; then
+            cpack -G "TGZ;DEB"
+          else
+            cpack -G "ZIP;WIX"
+          fi
           mkdir -p ../artifacts
-          mv *.tar.gz *.zip *.deb ../artifacts/
+          mv *.{tar.gz,deb,zip,msi} ../artifacts/ 2>/dev/null || true
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4  # Обновлено до v4
+        uses: actions/upload-artifact@v4
         with:
-          name: packages
+          name: packages-${{ runner.os }}
           path: artifacts/*
           retention-days: 3
 
-      - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
+  create-release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-packages
+
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/*
+          files: |
+            release-packages/**/*
           generate_release_notes: true
