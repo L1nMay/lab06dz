@@ -1,31 +1,59 @@
-name: Auto Release
+name: Build and Release
 
 on:
   push:
-    tags: ['v*.*.*']
+    tags: ['v*.*.*']  # Формат v1.0.0, v2.3.1
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+
     steps:
-    - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Install dependencies
-      run: sudo apt-get update && sudo apt-get install -y cmake build-essential
+      - name: Setup CMake
+        uses: actions/setup-cmake@v3
+        with:
+          cmake-version: '3.28.5'
 
-    - name: Configure and build
-      run: |
-        mkdir -p build
-        cd build
-        cmake ..
-        cmake --build . --config Release
-        cpack -G "TGZ;ZIP"
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            libssl-dev \
+            zlib1g-dev
 
-    - name: Create Release
-      if: startsWith(github.ref, 'refs/tags/')
-      uses: softprops/action-gh-release@v1
-      with:
-        files: |
-          build/*.tar.gz
-          build/*.zip
+      - name: Configure project
+        run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build project
+        run: cmake --build build --parallel $(nproc)
+
+      - name: Generate packages
+        run: |
+          cd build
+          cpack -G "TGZ;ZIP;DEB"
+          mkdir -p ../artifacts
+          mv *.tar.gz *.zip *.deb ../artifacts/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: artifacts/*
+          retention-days: 3
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
