@@ -1,0 +1,71 @@
+name: Build and Package
+
+on:
+  push:
+    tags: ['v*']  # Триггер только для тегов версий
+  workflow_dispatch:  # Ручной запуск
+
+jobs:
+  package:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Install dependencies
+      run: |
+        if [[ "${{ runner.os }}" == "Linux" ]]; then
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential rpm
+        elif [[ "${{ runner.os }}" == "macOS" ]]; then
+          brew install cmake
+        fi
+
+    - name: Configure CMake
+      run: cmake -B build -S .
+
+    - name: Build
+      run: cmake --build build --config Release
+
+    - name: Create packages
+      run: |
+        cd build
+        if [[ "${{ runner.os }}" == "Linux" ]]; then
+          cpack -G "DEB;RPM;TGZ;ZIP"
+        elif [[ "${{ runner.os }}" == "macOS" ]]; then
+          cpack -G "DragNDrop;ZIP"
+        else
+          cpack -G "WIX;ZIP"
+        fi
+        mkdir -p ../artifacts
+        mv *.{deb,rpm,tar.gz,zip,dmg,msi} ../artifacts/ || true
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: packages-${{ runner.os }}
+        path: artifacts/*
+
+  release:
+    needs: package
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+    - uses: actions/download-artifact@v3
+      with:
+        path: artifacts
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          artifacts/**/*.deb
+          artifacts/**/*.rpm
+          artifacts/**/*.msi
+          artifacts/**/*.dmg
+          artifacts/**/*.tar.gz
+          artifacts/**/*.zip
