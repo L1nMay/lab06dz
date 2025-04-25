@@ -1,4 +1,4 @@
-name: CI/CD Pipeline
+name: Cross-Platform CI/CD Pipeline
 
 on:
   push:
@@ -22,8 +22,8 @@ jobs:
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
             cmake \
             build-essential \
             zlib1g-dev \
@@ -32,19 +32,15 @@ jobs:
       - name: Install dependencies (Windows)
         if: runner.os == 'Windows'
         run: |
-          choco install -y \
-            cmake \
-            ninja \
-            --no-progress \
-            --ignore-checksums
+          choco install cmake -y --no-progress --ignore-checksums
+          choco install ninja -y --no-progress --ignore-checksums
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
           brew update
-          brew install \
-            cmake \
-            pkg-config
+          brew install cmake pkg-config
+          brew upgrade cmake || true
 
       - name: Configure project
         run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
@@ -54,19 +50,18 @@ jobs:
 
       - name: Run tests
         working-directory: ./build
-        run: ctest --output-on-failure || echo "Some tests failed"
+        run: ctest --output-on-failure || echo "Some tests failed - continuing"
 
       - name: Create packages
         run: |
           cd build
           if [ "$RUNNER_OS" == "Linux" ]; then
-            # Сначала создаем TGZ, затем DEB с обработкой ошибок
-            cpack -G "TGZ" && echo "TGZ package created successfully"
-            cpack -G "DEB" || echo "DEB package may have warnings"
+            cpack -G "TGZ" && echo "TGZ package created"
+            cpack -G "DEB" || echo "DEB package skipped"
           elif [ "$RUNNER_OS" == "macOS" ]; then
-            cpack -G "DragNDrop;ZIP"
+            cpack -G "ZIP;DragNDrop"
           else
-            cpack -G "WIX;ZIP"
+            cpack -G "ZIP;WIX"
           fi
           mkdir -p ../artifacts
           find . -maxdepth 1 -type f \( \
