@@ -1,0 +1,116 @@
+name: Build and Release Packages
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, macos-12, windows-2022]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup CMake
+        uses: actions/setup-cmake@v3
+        with:
+          cmake-version: '3.26.4'
+
+      - name: Install system dependencies
+        run: |
+          case "$RUNNER_OS" in
+            Linux)
+              sudo apt-get update
+              sudo apt-get install -y \
+                build-essential \
+                rpm \
+                libssl-dev \
+                zlib1g-dev
+              ;;
+            macOS)
+              brew install pkg-config
+              ;;
+            Windows)
+              choco install -y ninja
+              ;;
+          esac
+
+      - name: Configure project
+        run: |
+          cmake -B build -S . \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/usr/local
+
+      - name: Build project
+        run: cmake --build build --parallel 4
+
+      - name: Run tests
+        working-directory: ./build
+        run: ctest --output-on-failure
+
+      - name: Generate packages
+        run: |
+          cd build
+          case "$RUNNER_OS" in
+            Linux)
+              cpack -G "DEB;RPM;TGZ;ZIP" \
+                -D CPACK_DEBIAN_PACKAGE_DEPENDS="libssl3, zlib1g" \
+                -D CPACK_RPM_PACKAGE_REQUIRES="openssl-libs, zlib"
+              ;;
+            macOS)
+              cpack -G "DragNDrop;ZIP" \
+                -D CPACK_DMG_BACKGROUND_IMAGE="../packaging/macos-background.png"
+              ;;
+            Windows)
+              cpack -G "WIX;ZIP" \
+                -D CPACK_WIX_PRODUCT_GUID="YOUR-GUID-HERE" \
+                -D CPACK_WIX_UPGRADE_GUID="YOUR-GUID-HERE"
+              ;;
+          esac
+
+      - name: Verify packages
+        run: |
+          cd build
+          ls -lh *.deb *.rpm *.tar.gz *.zip *.dmg *.msi || true
+          sha256sum *.tar.gz *.zip > checksums.txt
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages-${{ runner.os }}
+          path: |
+            build/*.deb
+            build/*.rpm
+            build/*.tar.gz
+            build/*.zip
+            build/*.dmg
+            build/*.msi
+            build/checksums.txt
+          retention-days: 7
+
+  create-release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-packages
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-packages/**/*
+          draft: false
+          prerelease: false
+          generate_release_notes: true
