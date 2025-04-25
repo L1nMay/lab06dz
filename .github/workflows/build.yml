@@ -4,8 +4,6 @@ on:
   push:
     branches: [ main ]
     tags: [ 'v*.*.*' ]
-  pull_request:
-    branches: [ main ]
 
 jobs:
   build:
@@ -29,16 +27,11 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           brew install cmake
-          brew link --overwrite cmake
 
       - name: Install dependencies (Windows)
         if: runner.os == 'Windows'
         run: |
-          Invoke-WebRequest -Uri https://github.com/Kitware/CMake/releases/download/v3.28.3/cmake-3.28.3-windows-x86_64.msi -OutFile cmake.msi
-          Start-Process -FilePath "msiexec.exe" -ArgumentList "/i cmake.msi /quiet ADD_CMAKE_TO_PATH=System" -Wait
-          Invoke-WebRequest -Uri https://github.com/ninja-build/ninja/releases/download/v1.12.1/ninja-win.zip -OutFile ninja.zip
-          Expand-Archive -Path ninja.zip -DestinationPath "$env:ProgramFiles\ninja"
-          echo "$env:ProgramFiles\ninja" >> $env:GITHUB_PATH
+          choco install cmake ninja -y --no-progress --ignore-checksums
 
       - name: Configure
         run: cmake -B build -S .
@@ -46,18 +39,26 @@ jobs:
       - name: Build
         run: cmake --build build --config Release
 
-      - name: Create packages
+      - name: Create packages (Linux/macOS)
+        if: runner.os != 'Windows'
         run: |
           cd build
           if [ "$RUNNER_OS" == "Linux" ]; then
             cpack -G "TGZ"
-          elif [ "$RUNNER_OS" == "macOS" ]; then
-            cpack -G "ZIP"
           else
             cpack -G "ZIP"
           fi
           mkdir -p ../artifacts
           find . -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec mv {} ../artifacts/ \;
+
+      - name: Create packages (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          cd build
+          cpack -G ZIP
+          if not exist ..\artifacts mkdir ..\artifacts
+          move *.zip ..\artifacts\
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
