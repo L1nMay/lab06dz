@@ -11,7 +11,7 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
 
@@ -23,60 +23,45 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake build-essential zlib1g-dev
-
-      - name: Install dependencies (Windows)
-        if: runner.os == 'Windows'
-        timeout-minutes: 15
-        run: |
-          choco install cmake ninja -y --no-progress --ignore-checksums
-          refreshenv
+          sudo apt-get install -y cmake build-essential
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew update
           brew install cmake
+          brew link --overwrite cmake
+
+      - name: Install dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          Invoke-WebRequest -Uri https://github.com/Kitware/CMake/releases/download/v3.28.3/cmake-3.28.3-windows-x86_64.msi -OutFile cmake.msi
+          Start-Process -FilePath "msiexec.exe" -ArgumentList "/i cmake.msi /quiet ADD_CMAKE_TO_PATH=System" -Wait
+          Invoke-WebRequest -Uri https://github.com/ninja-build/ninja/releases/download/v1.12.1/ninja-win.zip -OutFile ninja.zip
+          Expand-Archive -Path ninja.zip -DestinationPath "$env:ProgramFiles\ninja"
+          echo "$env:ProgramFiles\ninja" >> $env:GITHUB_PATH
 
       - name: Configure
         run: cmake -B build -S .
 
       - name: Build
-        run: cmake --build build --config Release --parallel 2
+        run: cmake --build build --config Release
 
       - name: Create packages
         run: |
           cd build
           if [ "$RUNNER_OS" == "Linux" ]; then
             cpack -G "TGZ"
-            cpack -G "DEB" || true
           elif [ "$RUNNER_OS" == "macOS" ]; then
             cpack -G "ZIP"
           else
-            cpack -G "ZIP;WIX"
+            cpack -G "ZIP"
           fi
           mkdir -p ../artifacts
-          find . -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.deb' -o -name '*.zip' -o -name '*.msi' \) -exec mv {} ../artifacts/ \;
+          find . -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec mv {} ../artifacts/ \;
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: packages-${{ runner.os }}
           path: build/artifacts/*
-
-  create-release:
-    needs: build
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
-
-    steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: release-packages
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: release-packages/**/*
-          generate_release_notes: true
+          retention-days: 7

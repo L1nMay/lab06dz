@@ -17,6 +17,7 @@ set(HEADERS include/solver.h)
 # Исполняемый файл
 add_executable(solver ${SOURCES} ${HEADERS})
 target_include_directories(solver PUBLIC include)
+target_link_libraries(solver PUBLIC m)  # Для Linux: связываем с математической библиотекой
 
 # Установка
 install(TARGETS solver DESTINATION bin)
@@ -31,15 +32,11 @@ set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/LICENSE")
 
 # Платформозависимые настройки
 if(WIN32)
-    set(CPACK_GENERATOR "ZIP;WIX")
-    set(CPACK_WIX_PRODUCT_GUID "653cd22f-cbc0-43d7-a59b-e2af6ad931f7")
-    set(CPACK_WIX_UPGRADE_GUID "d4e5f6a7-b8c9-4d0e-a1b2-c3d4e5f6a7b8")
+    set(CPACK_GENERATOR "ZIP")
 elseif(APPLE)
-    set(CPACK_GENERATOR "ZIP")  # DragNDrop требует background.png
+    set(CPACK_GENERATOR "ZIP")
 else()
-    set(CPACK_GENERATOR "TGZ;DEB")
-    set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Maintainer <maintainer@example.com>")
-    set(CPACK_DEBIAN_PACKAGE_DEPENDS "libc6 (>= 2.14)")
+    set(CPACK_GENERATOR "TGZ")
 endif()
 
 include(CPack)
