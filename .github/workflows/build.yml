@@ -9,9 +9,10 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [ubuntu-22.04, windows-2022]
+        os: [ubuntu-22.04, windows-2022, macos-12]
     runs-on: ${{ matrix.os }}
 
+    timeout-minutes: 45  # Увеличенный таймаут для всех ОС
     permissions:
       contents: write
       packages: write
@@ -20,52 +21,61 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Setup CMake (Windows)
-        if: runner.os == 'Windows'
-        uses: actions/setup-cmake@v3
         with:
-          cmake-version: '3.28.5'
+          fetch-depth: 0
 
-      - name: Setup CMake (Linux)
-        if: runner.os == 'Linux'
-        uses: actions/setup-cmake@v3
+      - name: Cache CMake
+        uses: actions/cache@v3
         with:
-          cmake-version: '3.28.5'
+          path: |
+            ~/.cmake
+            ${{ github.workspace }}/build
+          key: ${{ runner.os }}-cmake-${{ hashFiles('CMakeLists.txt') }}
 
-      - name: Install dependencies (Linux)
-        if: runner.os == 'Linux'
+      - name: Install system dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential zlib1g-dev
+          if [ "$RUNNER_OS" == "Linux" ]; then
+            sudo apt-get update
+            sudo apt-get install -y build-essential zlib1g-dev
+          elif [ "$RUNNER_OS" == "macOS" ]; then
+            brew update
+            brew install cmake pkg-config
+          else
+            choco install -y ninja --no-progress --ignore-checksums
+          fi
 
-      - name: Install dependencies (Windows)
-        if: runner.os == 'Windows'
-        run: choco install -y ninja
+      - name: Setup CMake
+        uses: actions/setup-cmake@v2  # Используем проверенную v2
+        with:
+          cmake-version: '3.28.5'
 
       - name: Configure
         run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
-        run: cmake --build build --config Release
+        run: |
+          cmake --build build --config Release --parallel 2
+          echo "Build completed on $RUNNER_OS"
 
       - name: Package
         run: |
           cd build
           if [ "$RUNNER_OS" == "Linux" ]; then
             cpack -G "TGZ;DEB"
+          elif [ "$RUNNER_OS" == "macOS" ]; then
+            cpack -G "DragNDrop;ZIP"
           else
-            cpack -G "ZIP;WIX"
+            cpack -G "WIX;ZIP"
           fi
           mkdir -p ../artifacts
-          mv *.{tar.gz,deb,zip,msi} ../artifacts/ 2>/dev/null || true
+          find . -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.deb' -o -name '*.zip' -o -name '*.dmg' -o -name '*.msi' \) -exec mv {} ../artifacts/ \;
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: packages-${{ runner.os }}
           path: artifacts/*
-          retention-days: 3
+          retention-days: 7
 
   create-release:
     needs: build
@@ -73,7 +83,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
 
     steps:
-      - name: Download artifacts
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: release-packages
@@ -84,3 +94,4 @@ jobs:
           files: |
             release-packages/**/*
           generate_release_notes: true
+          draft: false
