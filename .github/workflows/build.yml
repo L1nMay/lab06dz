@@ -1,4 +1,4 @@
-name: Build Solver
+name: Auto Release
 
 on:
   push:
@@ -7,35 +7,25 @@ on:
 
 jobs:
   build:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-
+    runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
 
     - name: Install dependencies
+      run: sudo apt-get update && sudo apt-get install -y cmake build-essential
+
+    - name: Configure and build
       run: |
-        if [ "${{ runner.os }}" == "Linux" ]; then
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake rpm
-        fi
-
-    - name: Configure
-      run: cmake -B build -S .
-
-    - name: Build
-      run: cmake --build build --config Release
-
-    - name: Package
-      run: |
+        mkdir -p build
         cd build
-        cpack -G "${{ matrix.os == 'macOS' && 'DragNDrop' || matrix.os == 'Windows' && 'WIX' || 'DEB;RPM;TGZ' }}"
-        mkdir -p ../artifacts
-        mv *.{deb,rpm,tar.gz,zip,dmg,msi} ../artifacts/ 2>/dev/null || true
+        cmake ..
+        cmake --build . --config Release
+        cpack -G "TGZ;ZIP"
 
-    - uses: actions/upload-artifact@v4
+    - name: Create Release
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v1
       with:
-        name: packages-${{ runner.os }}
-        path: artifacts/*~
+        files: |
+          build/*.tar.gz
+          build/*.zip
