@@ -1,164 +1,63 @@
-name: CI/CD Pipeline with Deployment
+name: CI/CD Pipeline
 
 on:
   push:
     branches: [ main ]
-    tags: [ 'v*.*.*' ]  # Семантическое версионирование (v1.0.0)
-  workflow_dispatch:
-    inputs:
-      environment:
-        description: 'Deploy environment (prod/stage/test)'
-        required: true
-        default: 'stage'
-
-env:
-  ARTIFACT_NAME: "app-${{ github.run_id }}.jar"
-  DEPLOY_TIMEOUT: 300  # 5 минут в секундах
+    tags: [ 'v*.*.*' ]
 
 jobs:
   build:
-    name: Build and Package
-    runs-on: ubuntu-latest
-    outputs:
-      artifact_path: ${{ steps.package.outputs.artifact_path }}
-      build_version: ${{ steps.version.outputs.build_version }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
 
     steps:
-    - name: Checkout Code
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Set up JDK
-      uses: actions/setup-java@v3
-      with:
-        java-version: '17'
-        distribution: 'temurin'
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake
+      - name: Install dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          choco install cmake ninja -y --no-progress --ignore-checksums
+      - name: Configure
+        run: cmake -B build -S .
 
-    - name: Extract Version
-      id: version
-      run: |
-        # Для тегов используем версию из имени тега
-        if [[ $GITHUB_REF == refs/tags/* ]]; then
-          echo "build_version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
-        else
-          # Для веток - хеш коммита + дата
-          echo "build_version=$(date +'%Y%m%d')-$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-        fi
+      - name: Build
+        run: cmake --build build --config Release
 
-    - name: Build with Maven
-      run: mvn -B clean package -Dversion=${{ steps.version.outputs.build_version }}
-
-    - name: Package Artifact
-      id: package
-      run: |
-        mkdir -p build/artifacts
-        cp target/*.jar build/artifacts/$ARTIFACT_NAME
-        echo "artifact_path=build/artifacts/$ARTIFACT_NAME" >> $GITHUB_OUTPUT
-
-    - name: Upload Artifact
-      uses: actions/upload-artifact@v3
-      with:
-        name: application-jar
-        path: ${{ steps.package.outputs.artifact_path }}
-
-  deploy:
-    name: Deploy to ${{ inputs.environment || 'stage' }}
-    needs: build
-    runs-on: ubuntu-latest
-    environment: ${{ inputs.environment || 'stage' }}
-    timeout-minutes: 15
-
-    steps:
-    - name: Download Artifact
-      uses: actions/download-artifact@v3
-      with:
-        name: application-jar
-
-    - name: Configure AWS CLI
-      if: contains(env.environment, 'prod') || contains(env.environment, 'stage')
-      uses: aws-actions/configure-aws-credentials@v2
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ secrets.AWS_REGION }}
-
-    - name: Deploy to EC2 (SSH)
-      if: contains(env.environment, 'prod') || contains(env.environment, 'stage')
-      run: |
-        DEPLOY_HOST=${{ secrets[format('DEPLOY_HOST_{0}', inputs.environment)] }}
-        SSH_USER=${{ secrets.SSH_USER }}
-        DEPLOY_PATH="/opt/applications"
-
-        scp -o StrictHostKeyChecking=no *.jar $SSH_USER@$DEPLOY_HOST:$DEPLOY_PATH/
-        ssh $SSH_USER@$DEPLOY_HOST "
-          sudo systemctl stop app-service && \
-          mv $DEPLOY_PATH/*.jar $DEPLOY_PATH/backup/ && \
-          mv $DEPLOY_PATH/$ARTIFACT_NAME $DEPLOY_PATH/app.jar && \
-          sudo systemctl start app-service
-        "
-        echo "Deployed to $DEPLOY_HOST"
-
-    - name: Deploy to Kubernetes (EKS)
-      if: contains(env.environment, 'k8s')
-      run: |
-        echo "Updating Kubernetes deployment..."
-        kubectl set image deployment/app \
-          app=ghcr.io/${{ github.repository }}:${{ needs.build.outputs.build_version }} \
-          --record
-
-    - name: Verify Deployment
-      run: |
-        HEALTH_CHECK_URL="${{ secrets.HEALTH_CHECK_URL }}/actuator/health"
-        echo "Checking $HEALTH_CHECK_URL..."
-
-        for i in {1..10}; do
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" $HEALTH_CHECK_URL)
-          if [ "$STATUS" -eq 200 ]; then
-            echo "Deployment verified successfully!"
-            exit 0
+      - name: Create packages (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          cd build
+          if [ "$RUNNER_OS" == "Linux" ]; then
+            cpack -G "TGZ"
+          else
+            cpack -G "ZIP"
           fi
-          sleep 15
-        done
-
-        echo "Deployment verification failed"
-        exit 1
-
-    - name: Notify Slack
-      uses: slackapi/slack-github-action@v1.23.0
-      if: always()
-      with:
-        slack-message: |
-          *Deployment Result*: ${{ job.status }}
-          *Environment*: ${{ inputs.environment || 'stage' }}
-          *Version*: ${{ needs.build.outputs.build_version }}
-          *Run URL*: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-      env:
-        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-
-  rollback:
-    name: Rollback
-    if: failure() && needs.deploy.result == 'failure'
-    needs: [build, deploy]
-    runs-on: ubuntu-latest
-    steps:
-    - name: Execute Rollback (SSH)
-      run: |
-        DEPLOY_HOST=${{ secrets[format('DEPLOY_HOST_{0}', inputs.environment)] }}
-        SSH_USER=${{ secrets.SSH_USER }}
-
-        ssh $SSH_USER@$DEPLOY_HOST "
-          sudo systemctl stop app-service && \
-          mv $DEPLOY_PATH/app.jar $DEPLOY_PATH/failed-$ARTIFACT_NAME && \
-          mv $DEPLOY_PATH/backup/*.jar $DEPLOY_PATH/app.jar && \
-          sudo systemctl start app-service
-        "
-        echo "Rollback completed"
-
-    - name: Notify Rollback
-      uses: slackapi/slack-github-action@v1.23.0
-      with:
-        slack-message: |
-          :warning: *ROLLBACK EXECUTED*
-          *Environment*: ${{ inputs.environment || 'stage' }}
-          *Reason*: Deployment failed
-      env:
-        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          mkdir -p ../artifacts
+          find . -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec mv {} ../artifacts/ \;
+      - name: Create packages (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          cd build
+          cpack -G ZIP
+          if not exist ..\artifacts mkdir ..\artifacts
+          move *.zip ..\artifacts\
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages-${{ runner.os }}
+          path: build/artifacts/*
+          retention-days: 7
