@@ -36,6 +36,10 @@ jobs:
         if: runner.os == 'Windows'
         shell: powershell
         run: |
+          # Install scoop (if not already installed)
+          if (!(Get-Command -Name scoop -ErrorAction SilentlyContinue)) {
+            iex "& {$(irm 'https://get.scoop.sh')}"
+          }
           $retries = 3
           for ($i = 1; $i -le $retries; $i++) {
             try {
@@ -64,13 +68,12 @@ jobs:
         run: cmake --build build --config Release
 
       - name: List files in artifacts directory
-        shell: powershell
         run: |
-          if ($env:RUNNER_OS -eq "Linux" -or $env:RUNNER_OS -eq "macOS") {
+          if [[ "$RUNNER_OS" == "Linux" || "$RUNNER_OS" == "macOS" ]]; then
             ls -l build/artifacts
-          } elseif ($env:RUNNER_OS -eq "Windows") {
+          elif [[ "$RUNNER_OS" == "Windows" ]]; then
             dir build\artifacts
-          }
+          fi
 
       - name: Create packages (Linux/macOS)
         if: runner.os != 'Windows'
