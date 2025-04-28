@@ -21,37 +21,42 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake build-essential
+        retry: 3 # Добавляем retry
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
           brew install cmake
+        retry: 3
 
       - name: Install dependencies (Windows)
         if: runner.os == 'Windows'
         run: |
-          choco install cmake ninja -y --no-progress --ignore-checksums
+          choco install cmake ninja -y --no-progress --ignore-checksums || scoop install cmake #Пытаемся установить cmake через scoop если choco не сработал
+        shell: powershell
+        retry: 3
 
       - name: Create build directory
-        run: mkdir -p build # Ensure build directory exists
+        run: mkdir -p build
 
       - name: Configure CMake
-        run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release # Explicitly set build type
+        run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
         run: cmake --build build --config Release
 
       - name: List files in artifacts directory
         run: |
-          ls -l build/artifacts # List artifacts directory contents (Linux/macOS)
-          dir build/artifacts   # List artifacts directory contents (Windows)
+          ls -l build/artifacts  # List artifacts directory contents (Linux/macOS)
+          if ($env:RUNNER_OS -eq "Windows") { dir build\artifacts } # List artifacts directory contents (Windows)
+        shell: powershell
 
       - name: Create packages (Linux/macOS)
         if: runner.os != 'Windows'
         run: |
           cd build
           cpack -G "TGZ"
-          mkdir -p ../artifacts  # Создаём artifacts на один уровень выше build
+          mkdir -p ../artifacts
           find . -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec mv {} ../artifacts/ \;
 
       - name: Create packages (Windows)
@@ -60,12 +65,12 @@ jobs:
         run: |
           cd build
           cpack -G ZIP
-          if not exist ..\artifacts mkdir ..\artifacts # Создаём artifacts на один уровень выше build
+          if not exist ..\artifacts mkdir ..\artifacts
           move *.zip ..\artifacts\
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: packages-${{ runner.os }}
-          path: artifacts/*  # Upload from the root artifacts directory
+          path: artifacts/*
           retention-days: 7
