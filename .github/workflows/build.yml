@@ -21,7 +21,7 @@ jobs:
         run: |
           for i in {1..3}; do
             sudo apt-get update && sudo apt-get install -y cmake build-essential && break || echo "Attempt $i failed"
-            sleep 5 # Wait before retrying
+            sleep 5
           done
 
       - name: Install dependencies (macOS)
@@ -29,37 +29,30 @@ jobs:
         run: |
           for i in {1..3}; do
             brew install cmake && break || echo "Attempt $i failed"
-            sleep 5 # Wait before retrying
+            sleep 5
           done
 
       - name: Install dependencies (Windows)
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          # Install scoop (if not already installed)
           if (!(Get-Command -Name scoop -ErrorAction SilentlyContinue)) {
             iex "& {$(irm 'https://get.scoop.sh')}"
           }
           $retries = 3
           for ($i = 1; $i -le $retries; $i++) {
             try {
-              choco install cmake ninja -y --no-progress --ignore-checksums -Force
-              break # Exit the loop if successful
+              scoop install cmake
+              break
             } catch {
-              Write-Host "Attempt $($i) failed: $($_.Exception.Message)"
-              Write-Host "Attempting to install cmake via scoop"
-              try {
-                scoop install cmake
-                break
-              } catch {
-                Write-Host "Scoop install failed: $($_.Exception.Message)"
-              }
-              Start-Sleep -Seconds 5 # Wait before retrying
+              Write-Host "Attempt $i failed: $_"
+              Start-Sleep -Seconds 5
             }
           }
 
       - name: Create build directory
         run: mkdir -p build
+        shell: bash
 
       - name: Configure CMake
         run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
@@ -67,12 +60,14 @@ jobs:
       - name: Build
         run: cmake --build build --config Release
 
+      # Исправленный шаг (была ошибка на Windows)
       - name: List files in artifacts directory
+        shell: bash
         run: |
           if [[ "$RUNNER_OS" == "Linux" || "$RUNNER_OS" == "macOS" ]]; then
             ls -l build/artifacts
           elif [[ "$RUNNER_OS" == "Windows" ]]; then
-            dir build\artifacts
+            cmd /c "dir build\artifacts"
           fi
 
       - name: Create packages (Linux/macOS)
