@@ -28,7 +28,7 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           for i in {1..3}; do
-            brew install cmake && break || echo "Attempt $i failed"
+            brew install --formula cmake && break || echo "Attempt $i failed"
             sleep 5
           done
 
