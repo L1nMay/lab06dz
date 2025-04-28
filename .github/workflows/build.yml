@@ -64,12 +64,13 @@ jobs:
         run: cmake --build build --config Release
 
       - name: List files in artifacts directory
+        shell: powershell
         run: |
-          if [[ "$RUNNER_OS" == "Linux" || "$RUNNER_OS" == "macOS" ]]; then
+          if ($env:RUNNER_OS -eq "Linux" -or $env:RUNNER_OS -eq "macOS") {
             ls -l build/artifacts
-          elif [[ "$RUNNER_OS" == "Windows" ]]; then
+          } elseif ($env:RUNNER_OS -eq "Windows") {
             dir build\artifacts
-          fi
+          }
 
       - name: Create packages (Linux/macOS)
         if: runner.os != 'Windows'
