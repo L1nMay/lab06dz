@@ -23,7 +23,7 @@ jobs:
             sudo apt-get update && sudo apt-get install -y cmake build-essential && break || echo "Attempt $i failed"
             sleep 5 # Wait before retrying
           done
-          
+
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -31,7 +31,7 @@ jobs:
             brew install cmake && break || echo "Attempt $i failed"
             sleep 5 # Wait before retrying
           done
-          
+
       - name: Install dependencies (Windows)
         if: runner.os == 'Windows'
         shell: powershell
@@ -43,6 +43,13 @@ jobs:
               break # Exit the loop if successful
             } catch {
               Write-Host "Attempt $($i) failed: $($_.Exception.Message)"
+              Write-Host "Attempting to install cmake via scoop"
+              try {
+                scoop install cmake
+                break
+              } catch {
+                Write-Host "Scoop install failed: $($_.Exception.Message)"
+              }
               Start-Sleep -Seconds 5 # Wait before retrying
             }
           }
@@ -58,9 +65,11 @@ jobs:
 
       - name: List files in artifacts directory
         run: |
-          ls -l build/artifacts  # List artifacts directory contents (Linux/macOS)
-          if ($env:RUNNER_OS -eq "Windows") { dir build\artifacts } # List artifacts directory contents (Windows)
-        shell: powershell
+          if [[ "$RUNNER_OS" == "Linux" || "$RUNNER_OS" == "macOS" ]]; then
+            ls -l build/artifacts
+          elif [[ "$RUNNER_OS" == "Windows" ]]; then
+            dir build\artifacts
+          fi
 
       - name: Create packages (Linux/macOS)
         if: runner.os != 'Windows'
