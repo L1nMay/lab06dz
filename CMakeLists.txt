@@ -22,6 +22,12 @@ endif()
 set(SOURCES src/main.cpp)
 set(HEADERS include/solver.h)
 
+# Укажите директорию для исполняемого файла
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/artifacts)
+#Укажите директорию для библиотек, если они есть
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/artifacts)
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/artifacts)
+
 # Исполняемый файл
 add_executable(solver ${SOURCES} ${HEADERS})
 target_include_directories(solver PUBLIC include)
@@ -31,8 +37,8 @@ if(UNIX AND NOT APPLE)
     target_link_libraries(solver PUBLIC m)
 endif()
 
-# Установка
-install(TARGETS solver DESTINATION bin)
+# Установка -  уберите эту строку, она мешает корректной работе CPack
+#install(TARGETS solver DESTINATION bin)
 
 # Настройки CPack
 set(CPACK_PACKAGE_NAME "${PROJECT_NAME}")
@@ -50,5 +56,8 @@ elseif(APPLE)
 else()
     set(CPACK_GENERATOR "TGZ")
 endif()
+
+# Установите CPack_BUNDLE_EXECUTABLES, чтобы включить исполняемый файл в пакет
+set(CPACK_BUNDLE_EXECUTABLES TRUE)
 
 include(CPack)
