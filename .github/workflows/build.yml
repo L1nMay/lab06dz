@@ -16,8 +16,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Необходимо для работы с тегами
+          fetch-depth: 0  # Полная история для работы с тегами
 
+      # Установка зависимостей для Linux
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -26,6 +27,7 @@ jobs:
             sleep 5
           done
 
+      # Установка зависимостей для macOS
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -34,6 +36,7 @@ jobs:
             sleep 5
           done
 
+      # Установка зависимостей для Windows
       - name: Install dependencies (Windows)
         if: runner.os == 'Windows'
         shell: powershell
@@ -52,25 +55,30 @@ jobs:
             }
           }
 
+      # Создание директории сборки
       - name: Create build directory
         run: mkdir -p build
         shell: bash
 
+      # Конфигурация CMake
       - name: Configure CMake
         run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 
+      # Сборка проекта
       - name: Build
         run: cmake --build build --config Release
 
-      - name: List files in artifacts directory
+      # Просмотр артефактов сборки
+      - name: List build artifacts
         shell: bash
         run: |
-          if [[ "$RUNNER_OS" == "Linux" || "$RUNNER_OS" == "macOS" ]]; then
-            ls -l build/artifacts
-          elif [[ "$RUNNER_OS" == "Windows" ]]; then
-            cmd /c "dir build\artifacts"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            cmd /c "dir /b build"
+          else
+            ls -l build
           fi
 
+      # Создание пакетов для Linux/macOS
       - name: Create packages (Linux/macOS)
         if: runner.os != 'Windows'
         run: |
@@ -79,6 +87,7 @@ jobs:
           mkdir -p ../artifacts
           find . -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec mv {} ../artifacts/ \;
 
+      # Создание пакетов для Windows
       - name: Create packages (Windows)
         if: runner.os == 'Windows'
         shell: cmd
@@ -88,9 +97,10 @@ jobs:
           if not exist ..\artifacts mkdir ..\artifacts
           move *.zip ..\artifacts\
 
-      # Новый шаг: Поиск файлов из тегов
-      - name: Find release files from tags
-        id: find_tag_files
+      # Поиск файлов из тегов (Linux/macOS)
+      - name: Find release files from tags (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
         run: |
           if git describe --tags --abbrev=0 &>/dev/null; then
             TAG=$(git describe --tags --abbrev=0)
@@ -103,18 +113,45 @@ jobs:
             echo "files=" >> $GITHUB_OUTPUT
           fi
 
-      # Новый шаг: Копирование файлов из тегов
+      # Поиск файлов из тегов (Windows)
+      - name: Find release files from tags (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $tag = git describe --tags --abbrev=0 2>$null
+          if ($tag) {
+            Write-Host "Found tag: $tag"
+            $files = git ls-tree -r --name-only $tag | Where-Object { $_ -match '\.(tar\.gz|zip|deb|rpm|exe|msi)$' }
+            if (-not $files) { $files = "" }
+            Write-Host "Found files: $files"
+            echo "files=$files" >> $env:GITHUB_OUTPUT
+          } else {
+            Write-Host "No tags found"
+            echo "files=" >> $env:GITHUB_OUTPUT
+          }
+
+      # Копирование файлов из тегов
       - name: Copy tag files to artifacts
-        if: steps.find_tag_files.outputs.files != ''
+        if: steps.find_tag_files_linux.outputs.files != '' || steps.find_tag_files_windows.outputs.files != ''
+        shell: bash
         run: |
           mkdir -p artifacts/tag_files
-          TAG=$(git describe --tags --abbrev=0)
-          for file in ${{ steps.find_tag_files.outputs.files }}; do
-            git show "$TAG:$file" > "artifacts/tag_files/$(basename "$file")"
-          done
-          echo "Copied tag files:"
-          ls -l artifacts/tag_files
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            files="${{ steps.find_tag_files_windows.outputs.files }}"
+          else
+            files="${{ steps.find_tag_files_linux.outputs.files }}"
+          fi
 
+          if [ -n "$files" ]; then
+            TAG=$(git describe --tags --abbrev=0)
+            for file in $files; do
+              git show "$TAG:$file" > "artifacts/tag_files/$(basename "$file")"
+            done
+            echo "Copied tag files:"
+            ls -l artifacts/tag_files
+          fi
+
+      # Загрузка артефактов
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
