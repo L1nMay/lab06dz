@@ -15,122 +15,83 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # Полная история для работы с тегами
 
-      # Установка зависимостей (остаётся без изменений)
-      - name: Install dependencies (Linux)
-        if: runner.os == 'Linux'
+      # Установка зависимостей
+      - name: Install dependencies
+        shell: bash
         run: |
-          for i in {1..3}; do
-            sudo apt-get update && sudo apt-get install -y cmake build-essential && break || echo "Attempt $i failed"
-            sleep 5
-          done
-
-      - name: Install dependencies (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          for i in {1..3}; do
-            brew install --formula cmake && break || echo "Attempt $i failed"
-            sleep 5
-          done
-
-      - name: Install dependencies (Windows)
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          if (!(Get-Command -Name scoop -ErrorAction SilentlyContinue)) {
-            iex "& {$(irm 'https://get.scoop.sh')}"
-          }
-          $retries = 3
-          for ($i = 1; $i -le $retries; $i++) {
-            try {
-              scoop install cmake
-              break
-            } catch {
-              Write-Host "Attempt $i failed: $_"
-              Start-Sleep -Seconds 5
-            }
-          }
+          case "$RUNNER_OS" in
+            Linux)
+              sudo apt-get update
+              sudo apt-get install -y cmake build-essential zip
+              ;;
+            macOS)
+              brew install cmake
+              ;;
+            Windows)
+              choco install cmake -y
+              ;;
+          esac
 
       # Сборка проекта
-      - name: Create build directory
-        run: mkdir -p build
-        shell: bash
-
-      - name: Configure CMake
-        run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
-
       - name: Build
-        run: cmake --build build --config Release
+        shell: bash
+        run: |
+          mkdir -p build
+          cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release
+          cmake --build . --config Release
 
-      # Явная проверка собранных файлов
+      # Проверка собранных файлов
       - name: Verify build artifacts
         shell: bash
         run: |
           echo "Build contents:"
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            cmd /c "dir /s /b build"
-          else
-            find build -type f
-          fi
+          find build -type f -exec ls -lh {} \;
+          echo "Executable files:"
+          find build -type f -executable -exec ls -lh {} \;
 
-      # Создание пакетов
-      - name: Create packages (Linux/macOS)
-        if: runner.os != 'Windows'
-        run: |
-          cd build
-          cpack -G "TGZ"
-          mkdir -p ../artifacts/build
-          find . -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec mv {} ../artifacts/build/ \;
-
-      - name: Create packages (Windows)
-        if: runner.os == 'Windows'
-        shell: cmd
-        run: |
-          cd build
-          cpack -G ZIP
-          if not exist ..\artifacts\build mkdir ..\artifacts\build
-          move *.zip ..\artifacts\build\
-
-      # Извлечение файлов из тегов (кросс-платформенная версия)
-      - name: Extract files from tags
+      # Подготовка артефактов
+      - name: Prepare artifacts
         shell: bash
         run: |
-          mkdir -p artifacts/tags
-          # Получаем последний тег
-          TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          mkdir -p artifacts/bin
 
-          if [ -n "$TAG" ]; then
-            echo "Found tag: $TAG"
-            # Ищем все подходящие файлы в теге
-            FILES=$(git ls-tree -r --name-only $TAG | grep -E '\.(tar\.gz|zip|deb|rpm|exe|msi)$' || echo "")
+          # Копируем все исполняемые файлы и бинарники
+          find build -type f \( -executable -o -name "*.so*" -o -name "*.dylib" -o -name "*.dll" -o -name "*.exe" \) \
+            -exec cp {} artifacts/bin \;
 
-            if [ -n "$FILES" ]; then
-              echo "Found files in tag:"
-              echo "$FILES"
-              # Копируем каждый файл
-              for file in $FILES; do
-                echo "Copying $file..."
-                git show "$TAG:$file" > "artifacts/tags/$(basename "$file")"
-              done
-            else
-              echo "No matching files found in tag"
-            fi
-          else
-            echo "No tags found"
+          # Для Linux копируем solver из artifacts
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            cp build/artifacts/solver artifacts/bin/
           fi
 
-          # Проверка содержимого
-          echo "Tag artifacts:"
-          ls -l artifacts/tags
+          echo "Artifacts content:"
+          ls -lh artifacts/bin
+
+      # Создание архивов
+      - name: Create packages
+        shell: bash
+        run: |
+          cd artifacts
+          case "$RUNNER_OS" in
+            Linux|macOS)
+              tar czf ../Solver-${{ github.ref_name }}-$RUNNER_OS.tar.gz bin/
+              ;;
+            Windows)
+              zip -r ../Solver-${{ github.ref_name }}-$RUNNER_OS.zip bin/
+              ;;
+          esac
+
+          echo "Created packages:"
+          ls -lh ../*.tar.gz ../*.zip || true
 
       # Загрузка артефактов
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: packages-${{ runner.os }}
+          name: Solver-${{ runner.os }}
           path: |
-            artifacts/build/*
-            artifacts/tags/*
+            Solver-*.tar.gz
+            Solver-*.zip
           retention-days: 7
