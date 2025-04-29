@@ -2,8 +2,8 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: [ main ]
-    tags: [ 'v*.*.*' ]
+    branches: [main]
+    tags: ['v*.*.*']
 
 jobs:
   build:
@@ -15,6 +15,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Необходимо для работы с тегами
 
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
@@ -60,7 +62,6 @@ jobs:
       - name: Build
         run: cmake --build build --config Release
 
-      # Исправленный шаг (была ошибка на Windows)
       - name: List files in artifacts directory
         shell: bash
         run: |
@@ -87,9 +88,38 @@ jobs:
           if not exist ..\artifacts mkdir ..\artifacts
           move *.zip ..\artifacts\
 
+      # Новый шаг: Поиск файлов из тегов
+      - name: Find release files from tags
+        id: find_tag_files
+        run: |
+          if git describe --tags --abbrev=0 &>/dev/null; then
+            TAG=$(git describe --tags --abbrev=0)
+            echo "Found tag: $TAG"
+            FILES=$(git ls-tree -r --name-only $TAG | grep -E '\.(tar\.gz|zip|deb|rpm|exe|msi)$' || echo "")
+            echo "files=${FILES}" >> $GITHUB_OUTPUT
+            echo "Found files: $FILES"
+          else
+            echo "No tags found"
+            echo "files=" >> $GITHUB_OUTPUT
+          fi
+
+      # Новый шаг: Копирование файлов из тегов
+      - name: Copy tag files to artifacts
+        if: steps.find_tag_files.outputs.files != ''
+        run: |
+          mkdir -p artifacts/tag_files
+          TAG=$(git describe --tags --abbrev=0)
+          for file in ${{ steps.find_tag_files.outputs.files }}; do
+            git show "$TAG:$file" > "artifacts/tag_files/$(basename "$file")"
+          done
+          echo "Copied tag files:"
+          ls -l artifacts/tag_files
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: packages-${{ runner.os }}
-          path: artifacts/*
+          path: |
+            artifacts/*
+            artifacts/tag_files/*
           retention-days: 7
