@@ -23,18 +23,18 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake build-essential zip
+          sudo apt-get install -y cmake build-essential zip rpm
           cmake --version
 
-      # Установка зависимостей для macOS (с исправлением предупреждения)
+      # Установка зависимостей для macOS
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
           brew update
-          brew install --formula cmake
+          brew install --formula cmake create-dmg
           cmake --version
 
-      # Установка зависимостей для Windows (с zip)
+      # Установка зависимостей для Windows
       - name: Install dependencies (Windows)
         if: runner.os == 'Windows'
         shell: powershell
@@ -47,10 +47,11 @@ jobs:
           }
 
           # Установка cmake и zip
-          choco install cmake zip -y --no-progress
+          choco install cmake zip wixtoolset -y --no-progress
           refreshenv
           cmake --version
           zip --version
+          candle.exe -?
 
       # Сборка проекта
       - name: Configure and Build
@@ -91,29 +92,49 @@ jobs:
             exit 1
           fi
 
-      # Создание архивов (раздельные шаги для Windows)
-      - name: Create package (Linux/macOS)
-        if: runner.os != 'Windows'
+      # Создание исходников
+      - name: Create source packages
         shell: bash
         run: |
-          cd artifacts
-          if [[ "$RUNNER_OS" == "Linux" ]]; then
-            tar czf ../Solver-${{ github.ref_name }}-Linux.tar.gz *
-          else
-            tar czf ../Solver-${{ github.ref_name }}-macOS.tar.gz *
-          fi
-          cd ..
-          echo "Created package:"
-          ls -lh Solver-*.tar.gz
+          mkdir -p artifacts/source
+          git archive --format=tar.gz -o artifacts/source/Solver-${{ github.ref_name }}-src.tar.gz HEAD
+          git archive --format=zip -o artifacts/source/Solver-${{ github.ref_name }}-src.zip HEAD
 
-      - name: Create package (Windows)
+      # Создание бинарных пакетов для Linux
+      - name: Create Linux packages
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          cd build
+          cpack -G "DEB;RPM;TGZ"
+          mv *.deb *.rpm *.tar.gz ../artifacts/
+
+      # Создание пакета для macOS
+      - name: Create macOS package
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          mkdir -p pkg_root/usr/local/bin
+          cp artifacts/solver pkg_root/usr/local/bin/
+          create-dmg \
+            --volname "Solver Installer" \
+            --window-pos 200 120 \
+            --window-size 800 400 \
+            --icon-size 100 \
+            --icon "solver.app" 200 190 \
+            --hide-extension "solver.app" \
+            --app-drop-link 600 185 \
+            "artifacts/Solver-${{ github.ref_name }}-macOS.dmg" \
+            "pkg_root/"
+
+      # Создание пакетов для Windows
+      - name: Create Windows packages
         if: runner.os == 'Windows'
         shell: cmd
         run: |
-          cd artifacts
-          zip -r ..\Solver-%GITHUB_REF_NAME%-Windows.zip *
-          cd ..
-          dir Solver-*.zip
+          cd build
+          cpack -G "ZIP;WIX"
+          move *.zip *.msi ..\artifacts\
 
       # Загрузка артефактов
       - name: Upload artifacts
@@ -121,6 +142,5 @@ jobs:
         with:
           name: Solver-${{ runner.os }}
           path: |
-            Solver-*.tar.gz
-            Solver-*.zip
+            artifacts/*
           retention-days: 7
