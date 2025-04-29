@@ -16,7 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Полная история для работы с тегами
+          fetch-depth: 0
 
       # Установка зависимостей для Ubuntu
       - name: Install dependencies (Ubuntu)
@@ -39,6 +39,11 @@ jobs:
         if: runner.os == 'Windows'
         shell: powershell
         run: |
+          if (-not (Test-Path "$env:ProgramData\chocolatey\choco.exe")) {
+            Set-ExecutionPolicy Bypass -Scope Process -Force
+            [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+            iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+          }
           choco install cmake -y --no-progress
           refreshenv
           cmake --version
@@ -51,18 +56,20 @@ jobs:
           cd build
           cmake .. -DCMAKE_BUILD_TYPE=Release
           cmake --build . --config Release --parallel 2
-          mkdir -p artifacts
+
+          # Создаем директорию для артефактов
+          mkdir -p ../artifacts
 
           # Копируем результаты сборки
           case "$RUNNER_OS" in
             Linux)
-              find . -type f -executable -exec cp {} artifacts/ \;
+              find . -executable -type f ! -name "*.so*" -exec cp {} ../artifacts/ \;
               ;;
             macOS)
-              find . -type f -perm +111 -exec cp {} artifacts/ \;
+              find . -perm +111 -type f ! -name "*.dylib" -exec cp {} ../artifacts/ \;
               ;;
             Windows)
-              find . -type f \( -name "*.exe" -o -name "*.dll" \) -exec cp {} artifacts/ \;
+              find . -type f \( -name "*.exe" -o -name "*.dll" \) -exec cp {} ../artifacts/ \;
               ;;
           esac
 
@@ -71,29 +78,34 @@ jobs:
         shell: bash
         run: |
           echo "Artifacts directory contents:"
-          ls -lh build/artifacts/
-          echo "Executable files found:"
-          find build/artifacts/ -type f -exec ls -lh {} \;
+          ls -lh artifacts/
+          if [ ! -z "$(ls -A artifacts/)" ]; then
+            echo "Artifacts found:"
+            ls -lh artifacts/*
+          else
+            echo "No artifacts found!"
+            exit 1
+          fi
 
       # Создание архивов
       - name: Create packages
         shell: bash
         run: |
-          cd build/artifacts
+          cd artifacts
           case "$RUNNER_OS" in
             Linux)
-              tar czf ../../Solver-${{ github.ref_name }}-Linux.tar.gz *
+              tar czf ../Solver-${{ github.ref_name }}-Linux.tar.gz *
               ;;
             macOS)
-              tar czf ../../Solver-${{ github.ref_name }}-macOS.tar.gz *
+              tar czf ../Solver-${{ github.ref_name }}-macOS.tar.gz *
               ;;
             Windows)
-              zip -r ../../Solver-${{ github.ref_name }}-Windows.zip *
+              zip -r ../Solver-${{ github.ref_name }}-Windows.zip *
               ;;
           esac
-          cd ../..
+          cd ..
           echo "Created packages:"
-          ls -lh Soler-*
+          ls -lh Solver-*
 
       # Загрузка артефактов
       - name: Upload artifacts
