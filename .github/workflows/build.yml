@@ -39,13 +39,13 @@ jobs:
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          # Упрощенная установка Chocolatey
-          if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
-            Set-ExecutionPolicy Bypass -Scope Process -Force
-            iex ((New-Object System.Net.WebClient).DownloadString('https://chocolatey.org/install.ps1'))
+          # Альтернативная установка CMake без Chocolatey
+          $cmakeInstalled = Get-Command cmake -ErrorAction SilentlyContinue
+          if (-not $cmakeInstalled) {
+            Invoke-WebRequest -Uri "https://github.com/Kitware/CMake/releases/download/v3.28.3/cmake-3.28.3-windows-x86_64.msi" -OutFile "cmake.msi"
+            Start-Process msiexec -ArgumentList "/i cmake.msi /quiet /norestart" -Wait
+            $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
           }
-          choco install cmake -y --no-progress
-          refreshenv
           cmake --version
 
       # Сборка проекта
@@ -60,18 +60,29 @@ jobs:
           # Создаем директорию для артефактов
           mkdir -p ../artifacts
 
-          # Копируем результаты сборки
+          # Копируем результаты сборки (с правильными путями)
           case "$RUNNER_OS" in
-            Linux)
-              cp solver ../artifacts/
-              ;;
-            macOS)
-              cp solver ../artifacts/
+            Linux|macOS)
+              cp ./artifacts/solver ../artifacts/ || cp ./solver ../artifacts/
               ;;
             Windows)
-              cp solver.exe ../artifacts/
+              cp ./artifacts/solver.exe ../artifacts/ || cp ./solver.exe ../artifacts/
               ;;
           esac
+
+      # Проверка результатов
+      - name: Verify artifacts
+        shell: bash
+        run: |
+          echo "Artifacts directory contents:"
+          ls -lh artifacts/
+          if [ ! -z "$(ls -A artifacts/)" ]; then
+            echo "Artifacts found:"
+            ls -lh artifacts/*
+          else
+            echo "No artifacts found!"
+            exit 1
+          fi
 
       # Создание исходников
       - name: Create source packages
