@@ -15,76 +15,85 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Полная история для работы с тегами
 
-      # Установка зависимостей
-      - name: Install dependencies
-        shell: bash
+      # Установка зависимостей для Ubuntu
+      - name: Install dependencies (Ubuntu)
+        if: runner.os == 'Linux'
         run: |
-          case "$RUNNER_OS" in
-            Linux)
-              sudo apt-get update
-              sudo apt-get install -y cmake build-essential zip
-              ;;
-            macOS)
-              brew install cmake
-              ;;
-            Windows)
-              choco install cmake -y
-              ;;
-          esac
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential zip
+          cmake --version
+
+      # Установка зависимостей для macOS
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew update
+          brew install cmake
+          cmake --version
+
+      # Установка зависимостей для Windows
+      - name: Install dependencies (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          choco install cmake -y --no-progress
+          refreshenv
+          cmake --version
 
       # Сборка проекта
-      - name: Build
+      - name: Configure and Build
         shell: bash
         run: |
           mkdir -p build
           cd build
           cmake .. -DCMAKE_BUILD_TYPE=Release
-          cmake --build . --config Release
+          cmake --build . --config Release --parallel 2
+          mkdir -p artifacts
 
-      # Проверка собранных файлов
-      - name: Verify build artifacts
+          # Копируем результаты сборки
+          case "$RUNNER_OS" in
+            Linux)
+              find . -type f -executable -exec cp {} artifacts/ \;
+              ;;
+            macOS)
+              find . -type f -perm +111 -exec cp {} artifacts/ \;
+              ;;
+            Windows)
+              find . -type f \( -name "*.exe" -o -name "*.dll" \) -exec cp {} artifacts/ \;
+              ;;
+          esac
+
+      # Проверка результатов
+      - name: Verify artifacts
         shell: bash
         run: |
-          echo "Build contents:"
-          find build -type f -exec ls -lh {} \;
-          echo "Executable files:"
-          find build -type f -executable -exec ls -lh {} \;
-
-      # Подготовка артефактов
-      - name: Prepare artifacts
-        shell: bash
-        run: |
-          mkdir -p artifacts/bin
-
-          # Копируем все исполняемые файлы и бинарники
-          find build -type f \( -executable -o -name "*.so*" -o -name "*.dylib" -o -name "*.dll" -o -name "*.exe" \) \
-            -exec cp {} artifacts/bin \;
-
-          # Для Linux копируем solver из artifacts
-          if [[ "$RUNNER_OS" == "Linux" ]]; then
-            cp build/artifacts/solver artifacts/bin/
-          fi
-
-          echo "Artifacts content:"
-          ls -lh artifacts/bin
+          echo "Artifacts directory contents:"
+          ls -lh build/artifacts/
+          echo "Executable files found:"
+          find build/artifacts/ -type f -exec ls -lh {} \;
 
       # Создание архивов
       - name: Create packages
         shell: bash
         run: |
-          cd artifacts
+          cd build/artifacts
           case "$RUNNER_OS" in
-            Linux|macOS)
-              tar czf ../Solver-${{ github.ref_name }}-$RUNNER_OS.tar.gz bin/
+            Linux)
+              tar czf ../../Solver-${{ github.ref_name }}-Linux.tar.gz *
+              ;;
+            macOS)
+              tar czf ../../Solver-${{ github.ref_name }}-macOS.tar.gz *
               ;;
             Windows)
-              zip -r ../Solver-${{ github.ref_name }}-$RUNNER_OS.zip bin/
+              zip -r ../../Solver-${{ github.ref_name }}-Windows.zip *
               ;;
           esac
-
+          cd ../..
           echo "Created packages:"
-          ls -lh ../*.tar.gz ../*.zip || true
+          ls -lh Soler-*
 
       # Загрузка артефактов
       - name: Upload artifacts
