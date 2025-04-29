@@ -23,7 +23,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake build-essential zip rpm
+          sudo apt-get install -y cmake build-essential zip
           cmake --version
 
       # Установка зависимостей для macOS
@@ -31,7 +31,7 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           brew update
-          brew install --formula cmake create-dmg
+          brew install --formula cmake
           cmake --version
 
       # Установка зависимостей для Windows
@@ -39,19 +39,14 @@ jobs:
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          # Установка Chocolatey если нет
-          if (-not (Test-Path "$env:ProgramData\chocolatey\choco.exe")) {
+          # Упрощенная установка Chocolatey
+          if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
             Set-ExecutionPolicy Bypass -Scope Process -Force
-            [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-            iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+            iex ((New-Object System.Net.WebClient).DownloadString('https://chocolatey.org/install.ps1'))
           }
-
-          # Установка cmake и zip
-          choco install cmake zip wixtoolset -y --no-progress
+          choco install cmake -y --no-progress
           refreshenv
           cmake --version
-          zip --version
-          candle.exe -?
 
       # Сборка проекта
       - name: Configure and Build
@@ -68,29 +63,15 @@ jobs:
           # Копируем результаты сборки
           case "$RUNNER_OS" in
             Linux)
-              find . -executable -type f ! -name "*.so*" -exec cp {} ../artifacts/ \;
+              cp solver ../artifacts/
               ;;
             macOS)
-              find . -perm +111 -type f ! -name "*.dylib" -exec cp {} ../artifacts/ \;
+              cp solver ../artifacts/
               ;;
             Windows)
-              find . -type f \( -name "*.exe" -o -name "*.dll" \) -exec cp {} ../artifacts/ \;
+              cp solver.exe ../artifacts/
               ;;
           esac
-
-      # Проверка результатов
-      - name: Verify artifacts
-        shell: bash
-        run: |
-          echo "Artifacts directory contents:"
-          ls -lh artifacts/
-          if [ ! -z "$(ls -A artifacts/)" ]; then
-            echo "Artifacts found:"
-            ls -lh artifacts/*
-          else
-            echo "No artifacts found!"
-            exit 1
-          fi
 
       # Создание исходников
       - name: Create source packages
@@ -100,41 +81,35 @@ jobs:
           git archive --format=tar.gz -o artifacts/source/Solver-${{ github.ref_name }}-src.tar.gz HEAD
           git archive --format=zip -o artifacts/source/Solver-${{ github.ref_name }}-src.zip HEAD
 
-      # Создание бинарных пакетов для Linux
-      - name: Create Linux packages
+      # Создание пакетов для Linux
+      - name: Create Linux package
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          cd build
-          cpack -G "DEB;RPM;TGZ"
-          mv *.deb *.rpm *.tar.gz ../artifacts/
+          cd artifacts
+          tar czf Solver-${{ github.ref_name }}-Linux.tar.gz solver
+          echo "Created package:"
+          ls -lh *.tar.gz
 
       # Создание пакета для macOS
       - name: Create macOS package
         if: runner.os == 'macOS'
         shell: bash
         run: |
-          mkdir -p pkg_root/usr/local/bin
-          cp artifacts/solver pkg_root/usr/local/bin/
-          create-dmg \
-            --volname "Solver Installer" \
-            --window-pos 200 120 \
-            --window-size 800 400 \
-            --icon-size 100 \
-            --icon "solver.app" 200 190 \
-            --hide-extension "solver.app" \
-            --app-drop-link 600 185 \
-            "artifacts/Solver-${{ github.ref_name }}-macOS.dmg" \
-            "pkg_root/"
+          cd artifacts
+          tar czf Solver-${{ github.ref_name }}-macOS.tar.gz solver
+          echo "Created package:"
+          ls -lh *.tar.gz
 
-      # Создание пакетов для Windows
-      - name: Create Windows packages
+      # Создание пакета для Windows
+      - name: Create Windows package
         if: runner.os == 'Windows'
-        shell: cmd
+        shell: powershell
         run: |
-          cd build
-          cpack -G "ZIP;WIX"
-          move *.zip *.msi ..\artifacts\
+          cd artifacts
+          Compress-Archive -Path solver.exe -DestinationPath "Solver-${{ github.ref_name }}-Windows.zip"
+          echo "Created package:"
+          dir
 
       # Загрузка артефактов
       - name: Upload artifacts
