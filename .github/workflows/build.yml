@@ -26,27 +26,31 @@ jobs:
           sudo apt-get install -y cmake build-essential zip
           cmake --version
 
-      # Установка зависимостей для macOS
+      # Установка зависимостей для macOS (с исправлением предупреждения)
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
           brew update
-          brew install cmake
+          brew install --formula cmake
           cmake --version
 
-      # Установка зависимостей для Windows
+      # Установка зависимостей для Windows (с zip)
       - name: Install dependencies (Windows)
         if: runner.os == 'Windows'
         shell: powershell
         run: |
+          # Установка Chocolatey если нет
           if (-not (Test-Path "$env:ProgramData\chocolatey\choco.exe")) {
             Set-ExecutionPolicy Bypass -Scope Process -Force
             [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
             iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
           }
-          choco install cmake -y --no-progress
+
+          # Установка cmake и zip
+          choco install cmake zip -y --no-progress
           refreshenv
           cmake --version
+          zip --version
 
       # Сборка проекта
       - name: Configure and Build
@@ -87,25 +91,29 @@ jobs:
             exit 1
           fi
 
-      # Создание архивов
-      - name: Create packages
+      # Создание архивов (раздельные шаги для Windows)
+      - name: Create package (Linux/macOS)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           cd artifacts
-          case "$RUNNER_OS" in
-            Linux)
-              tar czf ../Solver-${{ github.ref_name }}-Linux.tar.gz *
-              ;;
-            macOS)
-              tar czf ../Solver-${{ github.ref_name }}-macOS.tar.gz *
-              ;;
-            Windows)
-              zip -r ../Solver-${{ github.ref_name }}-Windows.zip *
-              ;;
-          esac
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            tar czf ../Solver-${{ github.ref_name }}-Linux.tar.gz *
+          else
+            tar czf ../Solver-${{ github.ref_name }}-macOS.tar.gz *
+          fi
           cd ..
-          echo "Created packages:"
-          ls -lh Solver-*
+          echo "Created package:"
+          ls -lh Solver-*.tar.gz
+
+      - name: Create package (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          cd artifacts
+          zip -r ..\Solver-%GITHUB_REF_NAME%-Windows.zip *
+          cd ..
+          dir Solver-*.zip
 
       # Загрузка артефактов
       - name: Upload artifacts
