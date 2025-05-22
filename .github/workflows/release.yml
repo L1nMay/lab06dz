@@ -4,6 +4,12 @@ on:
   push:
     tags: ['v*.*.*']
 
+# Добавляем разрешения для GITHUB_TOKEN
+permissions:
+  contents: write  # Необходимо для создания релизов
+  packages: write  # Если вы загружаете пакеты
+  actions: read    # Для проверки статуса workflow
+
 jobs:
   build:
     strategy:
@@ -17,7 +23,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Установка зависимостей для Ubuntu
       - name: Install dependencies (Ubuntu)
         if: runner.os == 'Linux'
         run: |
