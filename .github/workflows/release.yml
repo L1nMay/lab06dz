@@ -4,11 +4,8 @@ on:
   push:
     tags: ['v*.*.*']
 
-# Добавляем разрешения для GITHUB_TOKEN
 permissions:
-  contents: write  # Необходимо для создания релизов
-  packages: write  # Если вы загружаете пакеты
-  actions: read    # Для проверки статуса workflow
+  contents: write
 
 jobs:
   build:
@@ -23,6 +20,7 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Установка зависимостей для Ubuntu
       - name: Install dependencies (Ubuntu)
         if: runner.os == 'Linux'
         run: |
@@ -38,17 +36,21 @@ jobs:
           brew install --formula cmake
           cmake --version
 
-      # Установка зависимостей для Windows (используем тот же подход, что и в build.yml)
+      # Установка зависимостей для Windows (с таймаутом)
       - name: Install dependencies (Windows)
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          # Установка CMake через Chocolatey
+          # Увеличиваем таймаут для Chocolatey
+          $ProgressPreference = 'SilentlyContinue'
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
           if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
             Set-ExecutionPolicy Bypass -Scope Process -Force
-            iex ((New-Object System.Net.WebClient).DownloadString('https://chocolatey.org/install.ps1'))
+            [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+            iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
           }
-          choco install cmake -y --no-progress
+          choco install cmake -y --no-progress --fail-on-error-output --timeout 900
           refreshenv
           cmake --version
 
@@ -74,21 +76,18 @@ jobs:
         shell: bash
         run: |
           cd build
-          # Для Linux создаем DEB и RPM
           if [ "$RUNNER_OS" = "Linux" ]; then
             cpack -G DEB
             cpack -G RPM
-          # Для macOS создаем DMG
           elif [ "$RUNNER_OS" = "macOS" ]; then
             cpack -G DragNDrop
-          # Для Windows создаем MSI
           elif [ "$RUNNER_OS" = "Windows" ]; then
             cpack -G WIX
           fi
           mkdir -p ../artifacts/packages
           cp *.deb *.rpm *.dmg *.msi ../artifacts/packages/ 2>/dev/null || :
 
-      # Копируем бинарные файлы
+      # Копирование бинарных файлов
       - name: Copy binaries
         shell: bash
         run: |
@@ -125,17 +124,19 @@ jobs:
             artifacts/*
           retention-days: 7
 
-      # Создание релиза
+      # Создание релиза (только если релиз еще не существует)
       - name: Create Release
+        if: success()
         uses: softprops/action-gh-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}  # Используем только имя тега без refs/tags/
+          name: Solver ${{ github.ref_name }}
           files: |
             artifacts/source/*
             artifacts/packages/*
             artifacts/binaries/*
           draft: false
           prerelease: false
+          fail_on_unmatched_files: true
