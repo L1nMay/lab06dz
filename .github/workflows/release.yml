@@ -2,10 +2,12 @@ name: Release Pipeline
 
 on:
   push:
+    branches: [main]
     tags: ['v*.*.*']
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   build:
@@ -36,39 +38,41 @@ jobs:
           brew install --formula cmake
           cmake --version
 
-      # Установка зависимостей для Windows
+      # Установка зависимостей для Windows с улучшенной обработкой ошибок
       - name: Install dependencies (Windows)
         if: runner.os == 'Windows'
         shell: powershell
         run: |
+          $ErrorActionPreference = 'Stop'
           $ProgressPreference = 'SilentlyContinue'
           [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-          if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
-            Set-ExecutionPolicy Bypass -Scope Process -Force
-            [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-            iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+          try {
+            if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
+              Set-ExecutionPolicy Bypass -Scope Process -Force
+              [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+              iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+            }
+            choco install cmake --version=3.28.1 -y --no-progress --fail-on-error-output --timeout 900
+            choco install wixtoolset -y --no-progress
+            refreshenv
+            cmake --version
+          } catch {
+            Write-Error "Failed to install dependencies: $_"
+            exit 1
           }
-          choco install cmake -y --no-progress --fail-on-error-output --timeout 900
-          choco install wixtoolset -y --no-progress
-          refreshenv
-          cmake --version
-          heat.exe -?
 
       # Подготовка Windows-specific файлов
       - name: Prepare Windows files
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          # Создаем минимальный LICENSE.rtf если его нет
           if [ ! -f LICENSE.rtf ]; then
             echo "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fnil\\fcharset0 Calibri;}}\\viewkind4\\uc1\\pard\\sa200\\sl276\\slmult1\\lang9\\f0\\fs22 Sample License Text\\par }" > LICENSE.rtf
           fi
-          # Создаем assets директорию если ее нет
           mkdir -p assets
-          # Создаем пустой icon.ico если его нет
           if [ ! -f assets/icon.ico ]; then
-            convert -size 256x256 xc:black assets/icon.ico || echo "ImageMagick not available, creating empty icon"
+            echo "Placeholder icon" > assets/icon.ico
           fi
 
       # Сборка проекта
@@ -79,8 +83,8 @@ jobs:
           cd build
           if [ "$RUNNER_OS" = "Windows" ]; then
             cmake .. -DCMAKE_BUILD_TYPE=Release \
-              -DCPACK_WIX_UPGRADE_GUID="$(uuidgen || echo 'YOUR-GUID-HERE')" \
-              -DCPACK_WIX_PRODUCT_GUID="$(uuidgen || echo 'YOUR-GUID-HERE')" \
+              -DCPACK_WIX_UPGRADE_GUID="$(uuidgen || echo '00000000-0000-0000-0000-000000000000')" \
+              -DCPACK_WIX_PRODUCT_GUID="$(uuidgen || echo '11111111-1111-1111-1111-111111111111')" \
               -DCPACK_WIX_LICENSE_RTF="../LICENSE.rtf" \
               -DCPACK_WIX_PRODUCT_ICON="../assets/icon.ico"
           else
@@ -88,24 +92,25 @@ jobs:
           fi
           cmake --build . --config Release --parallel 2
 
-      # Создание исходников
+      # Создание исходников (только для тегов)
       - name: Create source packages
+        if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
           mkdir -p artifacts/source
           git archive --format=tar.gz -o artifacts/source/Solver-${{ github.ref_name }}-src.tar.gz HEAD
           git archive --format=zip -o artifacts/source/Solver-${{ github.ref_name }}-src.zip HEAD
 
-      # Создание пакетов
+      # Создание пакетов (только для тегов)
       - name: Create packages
+        if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
           cd build
           if [ "$RUNNER_OS" = "Linux" ]; then
-            cpack -G DEB
-            cpack -G RPM
+            cpack -G DEB && cpack -G RPM
           elif [ "$RUNNER_OS" = "macOS" ]; then
-            cpack -G DragNDrop
+            cpack -G DragNDrop || cpack -G ZIP
           elif [ "$RUNNER_OS" = "Windows" ]; then
             if command -v heat.exe >/dev/null 2>&1; then
               cpack -G WIX || cpack -G ZIP
@@ -154,9 +159,9 @@ jobs:
             artifacts/*
           retention-days: 7
 
-      # Создание релиза
+      # Создание релиза (только для тегов)
       - name: Create Release
-        if: success()
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
