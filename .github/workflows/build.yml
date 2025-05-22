@@ -18,48 +18,42 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Установка зависимостей для Ubuntu
-      - name: Install dependencies (Ubuntu)
-        if: runner.os == 'Linux'
+      # Установка зависимостей
+      - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake build-essential zip rpm jq
+          case "$RUNNER_OS" in
+            Linux)
+              sudo apt-get update
+              sudo apt-get install -y cmake build-essential zip rpm
+              ;;
+            macOS)
+              brew install cmake --formula
+              ;;
+            Windows)
+              choco install cmake --version=3.28.1 -y --no-progress
+              ;;
+          esac
           cmake --version
 
-      # Установка зависимостей для macOS
-      - name: Install dependencies (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew update
-          brew install cmake
-          cmake --version
-
-      # Установка зависимостей для Windows
-      - name: Install dependencies (Windows)
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          choco install cmake --version=3.28.1 -y --no-progress
-          refreshenv
-          cmake --version
-
-      # Сборка проекта
-      - name: Configure and Build
-        shell: bash
+      # Сборка
+      - name: Build
         run: |
           mkdir -p build
           cd build
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
-          else
-            cmake .. -DCMAKE_BUILD_TYPE=Release
-          fi
-          cmake --build . --config Release --parallel 2
+          case "$RUNNER_OS" in
+            Windows)
+              cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
+              cmake --build . --config Release -- /m:2
+              ;;
+            *)
+              cmake .. -DCMAKE_BUILD_TYPE=Release
+              cmake --build . --config Release --parallel 2
+              ;;
+          esac
 
       # Создание пакетов
       - name: Create packages
         if: startsWith(github.ref, 'refs/tags/')
-        shell: bash
         run: |
           cd build
           case "$RUNNER_OS" in
@@ -74,48 +68,28 @@ jobs:
               cpack -G WIX
               ;;
           esac
-          mkdir -p ../artifacts/packages
-          cp *.deb *.rpm *.dmg *.msi ../artifacts/packages/ 2>/dev/null || :
+          mkdir -p ../artifacts
+          cp *.{deb,rpm,dmg,msi} ../artifacts/ 2>/dev/null || :
 
-      # Создание исходников
-      - name: Create source packages
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: bash
-        run: |
-          mkdir -p artifacts/source
-          git archive --format=tar.gz -o artifacts/source/Solver-${{ github.ref_name }}-src.tar.gz HEAD
-          git archive --format=zip -o artifacts/source/Solver-${{ github.ref_name }}-src.zip HEAD
-
-      # Создание релиза
+      # Создание релига
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: actions/github-script@v6
-        with:
-          script: |
-            const fs = require('fs');
-            const files = [
-              ...fs.readdirSync('artifacts/source'),
-              ...fs.readdirSync('artifacts/packages')
-            ].map(f => `artifacts/${f.includes('-src.') ? 'source' : 'packages'}/${f}`);
-
-            await github.rest.repos.createRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              tag_name: process.env.GITHUB_REF.replace('refs/tags/', ''),
-              name: process.env.GITHUB_REF.replace('refs/tags/', ''),
-              draft: false,
-              prerelease: false,
-              body: "Automated release"
-            }).then(async ({data: release}) => {
-              for (const file of files) {
-                await github.rest.repos.uploadReleaseAsset({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  release_id: release.id,
-                  name: file.split('/').pop(),
-                  data: fs.readFileSync(file)
-                });
-              }
-            });
+        uses: actions/create-release@v1
+        id: create_release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+
+      - name: Upload Assets
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./artifacts/*
+          asset_name: ${{ github.ref_name }}-${{ runner.os }}.pkg
