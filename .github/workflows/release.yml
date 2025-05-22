@@ -30,15 +30,22 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           brew update
-          brew install cmake
+          brew install --formula cmake
           cmake --version
 
-      # Установка зависимостей для Windows (упрощенная версия)
+      # Установка зависимостей для Windows (используем тот же подход, что и в build.yml)
       - name: Install dependencies (Windows)
         if: runner.os == 'Windows'
-        uses: lukka/run-cmake@v4
-        with:
-          cmakeVersion: 'latest'
+        shell: powershell
+        run: |
+          # Установка CMake через Chocolatey
+          if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
+            Set-ExecutionPolicy Bypass -Scope Process -Force
+            iex ((New-Object System.Net.WebClient).DownloadString('https://chocolatey.org/install.ps1'))
+          }
+          choco install cmake -y --no-progress
+          refreshenv
+          cmake --version
 
       # Сборка проекта
       - name: Configure and Build
