@@ -22,12 +22,6 @@ endif()
 set(SOURCES src/main.cpp)
 set(HEADERS include/solver.h)
 
-# Укажите директорию для исполняемого файла
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/artifacts)
-#Укажите директорию для библиотек, если они есть
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/artifacts)
-set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/artifacts)
-
 # Исполняемый файл
 add_executable(solver ${SOURCES} ${HEADERS})
 target_include_directories(solver PUBLIC include)
@@ -37,8 +31,8 @@ if(UNIX AND NOT APPLE)
     target_link_libraries(solver PUBLIC m)
 endif()
 
-# Установка -  уберите эту строку, она мешает корректной работе CPack
-#install(TARGETS solver DESTINATION bin)
+# Установка для CPack
+install(TARGETS solver DESTINATION bin)
 
 # Настройки CPack
 set(CPACK_PACKAGE_NAME "${PROJECT_NAME}")
@@ -47,17 +41,15 @@ set(CPACK_PACKAGE_DESCRIPTION "Simple equation solver")
 set(CPACK_PACKAGE_VENDOR "Your Organization")
 set(CPACK_PACKAGE_CONTACT "contact@example.com")
 set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/LICENSE")
+set(CPACK_PACKAGE_FILE_NAME "${PROJECT_NAME}-${PROJECT_VERSION}-${CMAKE_SYSTEM_NAME}")
 
-# Генераторы пакетов
+# Разные генераторы для разных систем
 if(WIN32)
-    set(CPACK_GENERATOR "ZIP")
+    set(CPACK_GENERATOR "WIX;ZIP")
 elseif(APPLE)
-    set(CPACK_GENERATOR "ZIP")
+    set(CPACK_GENERATOR "DragNDrop;ZIP")
 else()
-    set(CPACK_GENERATOR "TGZ")
+    set(CPACK_GENERATOR "DEB;RPM;TGZ")
 endif()
-
-# Установите CPack_BUNDLE_EXECUTABLES, чтобы включить исполняемый файл в пакет
-set(CPACK_BUNDLE_EXECUTABLES TRUE)
 
 include(CPack)
