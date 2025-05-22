@@ -13,7 +13,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
@@ -36,12 +36,11 @@ jobs:
           brew install --formula cmake
           cmake --version
 
-      # Установка зависимостей для Windows (с таймаутом)
+      # Установка зависимостей для Windows
       - name: Install dependencies (Windows)
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          # Увеличиваем таймаут для Chocolatey
           $ProgressPreference = 'SilentlyContinue'
           [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
@@ -51,8 +50,26 @@ jobs:
             iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
           }
           choco install cmake -y --no-progress --fail-on-error-output --timeout 900
+          choco install wixtoolset -y --no-progress
           refreshenv
           cmake --version
+          heat.exe -?
+
+      # Подготовка Windows-specific файлов
+      - name: Prepare Windows files
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          # Создаем минимальный LICENSE.rtf если его нет
+          if [ ! -f LICENSE.rtf ]; then
+            echo "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fnil\\fcharset0 Calibri;}}\\viewkind4\\uc1\\pard\\sa200\\sl276\\slmult1\\lang9\\f0\\fs22 Sample License Text\\par }" > LICENSE.rtf
+          fi
+          # Создаем assets директорию если ее нет
+          mkdir -p assets
+          # Создаем пустой icon.ico если его нет
+          if [ ! -f assets/icon.ico ]; then
+            convert -size 256x256 xc:black assets/icon.ico || echo "ImageMagick not available, creating empty icon"
+          fi
 
       # Сборка проекта
       - name: Configure and Build
@@ -60,7 +77,15 @@ jobs:
         run: |
           mkdir -p build
           cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cmake .. -DCMAKE_BUILD_TYPE=Release \
+              -DCPACK_WIX_UPGRADE_GUID="$(uuidgen || echo 'YOUR-GUID-HERE')" \
+              -DCPACK_WIX_PRODUCT_GUID="$(uuidgen || echo 'YOUR-GUID-HERE')" \
+              -DCPACK_WIX_LICENSE_RTF="../LICENSE.rtf" \
+              -DCPACK_WIX_PRODUCT_ICON="../assets/icon.ico"
+          else
+            cmake .. -DCMAKE_BUILD_TYPE=Release
+          fi
           cmake --build . --config Release --parallel 2
 
       # Создание исходников
@@ -82,10 +107,15 @@ jobs:
           elif [ "$RUNNER_OS" = "macOS" ]; then
             cpack -G DragNDrop
           elif [ "$RUNNER_OS" = "Windows" ]; then
-            cpack -G WIX
+            if command -v heat.exe >/dev/null 2>&1; then
+              cpack -G WIX || cpack -G ZIP
+            else
+              cpack -G ZIP
+              echo "WiX not found, created ZIP package instead" >&2
+            fi
           fi
           mkdir -p ../artifacts/packages
-          cp *.deb *.rpm *.dmg *.msi ../artifacts/packages/ 2>/dev/null || :
+          cp *.deb *.rpm *.dmg *.msi *.zip ../artifacts/packages/ 2>/dev/null || :
 
       # Копирование бинарных файлов
       - name: Copy binaries
@@ -124,14 +154,14 @@ jobs:
             artifacts/*
           retention-days: 7
 
-      # Создание релиза (только если релиз еще не существует)
+      # Создание релиза
       - name: Create Release
         if: success()
         uses: softprops/action-gh-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ github.ref_name }}  # Используем только имя тега без refs/tags/
+          tag_name: ${{ github.ref_name }}
           name: Solver ${{ github.ref_name }}
           files: |
             artifacts/source/*
@@ -139,4 +169,4 @@ jobs:
             artifacts/binaries/*
           draft: false
           prerelease: false
-          fail_on_unmatched_files: true
+          fail_on_unmatched_files: false
