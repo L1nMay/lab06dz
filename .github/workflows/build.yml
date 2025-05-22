@@ -11,85 +11,116 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # Установка зависимостей
-      - name: Install dependencies
+      # Установка зависимостей для Ubuntu
+      - name: Install dependencies (Ubuntu)
+        if: runner.os == 'Linux'
         run: |
-          case "$RUNNER_OS" in
-            Linux)
-              sudo apt-get update
-              sudo apt-get install -y cmake build-essential zip rpm
-              ;;
-            macOS)
-              brew install cmake --formula
-              ;;
-            Windows)
-              choco install cmake --version=3.28.1 -y --no-progress
-              ;;
-          esac
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential zip rpm
           cmake --version
-
-      # Сборка
-      - name: Build
+      # Установка зависимостей для macOS
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew update
+          brew install --formula cmake
+          cmake --version
+      # Установка зависимостей для Windows
+      - name: Install dependencies (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          # Установка CMake через Chocolatey
+          if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
+            Set-ExecutionPolicy Bypass -Scope Process -Force
+            iex ((New-Object System.Net.WebClient).DownloadString('https://chocolatey.org/install.ps1'))
+          }
+          choco install cmake -y --no-progress
+          refreshenv
+          cmake --version
+      # Сборка проекта
+      - name: Configure and Build
+        shell: bash
         run: |
           mkdir -p build
           cd build
-          case "$RUNNER_OS" in
-            Windows)
-              cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
-              cmake --build . --config Release -- /m:2
-              ;;
-            *)
-              cmake .. -DCMAKE_BUILD_TYPE=Release
-              cmake --build . --config Release --parallel 2
-              ;;
-          esac
-
-      # Создание пакетов
+          cmake .. -DCMAKE_BUILD_TYPE=Release
+          cmake --build . --config Release --parallel 2
+      # Создание исходников (только для тегов)
+      - name: Create source packages
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          mkdir -p artifacts/source
+          git archive --format=tar.gz -o artifacts/source/Solver-${{ github.ref_name }}-src.tar.gz HEAD
+          git archive --format=zip -o artifacts/source/Solver-${{ github.ref_name }}-src.zip HEAD
+      # Создание пакетов (только для тегов)
       - name: Create packages
         if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
         run: |
           cd build
+          # Для Linux создаем DEB и RPM
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            cpack -G DEB
+            cpack -G RPM
+          # Для macOS создаем DMG
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            cpack -G DragNDrop
+          # Для Windows создаем MSI
+          elif [ "$RUNNER_OS" = "Windows" ]; then
+            cpack -G WIX
+          fi
+          mkdir -p ../artifacts/packages
+          cp *.deb *.rpm *.dmg *.msi ../artifacts/packages/ 2>/dev/null || :
+      # Копируем бинарные файлы
+      - name: Copy binaries
+        shell: bash
+        run: |
+          mkdir -p artifacts/binaries
           case "$RUNNER_OS" in
-            Linux)
-              cpack -G DEB
-              cpack -G RPM
-              ;;
-            macOS)
-              cpack -G DragNDrop
+            Linux|macOS)
+              find build -name "solver" -type f -exec cp {} artifacts/binaries/ \;
               ;;
             Windows)
-              cpack -G WIX
+              find build -name "solver.exe" -type f -exec cp {} artifacts/binaries/ \;
               ;;
           esac
-          mkdir -p ../artifacts
-          cp *.{deb,rpm,dmg,msi} ../artifacts/ 2>/dev/null || :
+      # Проверка результатов
+      - name: Verify artifacts
+        shell: bash
+        run: |
+          echo "Artifacts directory contents:"
+          ls -lhR artifacts/
+          if [ ! -z "$(ls -A artifacts/)" ]; then
+            echo "Artifacts found:"
+            ls -lh artifacts/*
+          else
+            echo "No artifacts found!"
+            exit 1
+          fi
+      # Загрузка артефактов
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Solver-${{ runner.os }}
+          path: |
+            artifacts/*
+          retention-days: 7
 
-      # Создание релига
+      # Создание релиза (только для тегов)
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: actions/create-release@v1
-        id: create_release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref_name }}
-          draft: false
-          prerelease: false
-
-      - name: Upload Assets
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./artifacts/*
-          asset_name: ${{ github.ref_name }}-${{ runner.os }}.pkg
+          files: |
+            artifacts/source/*
+            artifacts/packages/*
+            artifacts/binaries/*
