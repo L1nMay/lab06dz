@@ -19,18 +19,23 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 90  # Увеличенный таймаут
+    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      # Создаем директорию для артефактов в самом начале
+      - name: Create artifacts directory
+        shell: bash
+        run: |
+          mkdir -p $ARTIFACTS_DIR/{packages,binaries,source}
+
       # Установка зависимостей для Linux
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         shell: bash
-        timeout-minutes: 10
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
@@ -42,10 +47,9 @@ jobs:
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
         shell: bash
-        timeout-minutes: 10
         run: |
           brew update --quiet
-          brew install cmake || brew upgrade cmake
+          brew install --formula cmake || brew upgrade cmake
           cmake --version
 
       # Установка зависимостей для Windows
@@ -105,7 +109,6 @@ jobs:
       # Сборка проекта
       - name: Configure and Build
         shell: bash
-        timeout-minutes: 30
         run: |
           mkdir -p build
           cd build
@@ -117,11 +120,10 @@ jobs:
             cmake --build . --config Release --parallel 2
           fi
 
-      # Проверка бинарного файла
-      - name: Verify binary exists
+      # Копирование бинарных файлов с проверкой
+      - name: Copy binaries
         shell: bash
         run: |
-          mkdir -p $ARTIFACTS_DIR/binaries
           case "$RUNNER_OS" in
             Linux|macOS)
               find build -name "solver" -exec cp {} $ARTIFACTS_DIR/binaries/ \;
@@ -131,12 +133,17 @@ jobs:
               ;;
           esac
 
+          # Проверка что файлы скопировались
+          if [ -z "$(ls -A $ARTIFACTS_DIR/binaries/)" ]; then
+            echo "::error::No binaries were copied!"
+            exit 1
+          fi
+
       # Создание исходников (только для тегов)
       - name: Create source packages
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
-          mkdir -p $ARTIFACTS_DIR/source
           git archive --format=tar.gz -o "$ARTIFACTS_DIR/source/Solver-${{ github.ref_name }}-src.tar.gz" HEAD
           git archive --format=zip -o "$ARTIFACTS_DIR/source/Solver-${{ github.ref_name }}-src.zip" HEAD
 
@@ -144,9 +151,7 @@ jobs:
       - name: Create packages
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
-        timeout-minutes: 20
         run: |
-          mkdir -p $ARTIFACTS_DIR/packages
           cd build
 
           case "$RUNNER_OS" in
@@ -196,12 +201,18 @@ jobs:
               ;;
           esac
 
+          # Проверка что пакеты созданы
+          if [ -z "$(ls -A ../$ARTIFACTS_DIR/packages/)" ]; then
+            echo "::error::No packages were created!"
+            exit 1
+          fi
+
       # Проверка артефактов
       - name: Verify artifacts
         shell: bash
         run: |
           echo "=== Artifacts structure ==="
-          find $ARTIFACTS_DIR/ -type f -exec ls -lh {} \; || echo "No artifacts found"
+          find $ARTIFACTS_DIR/ -type f -exec ls -lh {} \;
 
           echo "=== Package contents ==="
           case "$RUNNER_OS" in
@@ -223,7 +234,7 @@ jobs:
           name: Solver-${{ runner.os }}
           path: $ARTIFACTS_DIR/
           retention-days: 7
-          if-no-files-found: warn
+          if-no-files-found: error
 
       # Создание релиза (только для тегов)
       - name: Create Release
