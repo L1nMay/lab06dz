@@ -19,7 +19,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 90  # Увеличенный таймаут
 
     steps:
       - uses: actions/checkout@v4
@@ -30,6 +30,7 @@ jobs:
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         shell: bash
+        timeout-minutes: 10
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
@@ -41,25 +42,32 @@ jobs:
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
         shell: bash
+        timeout-minutes: 10
         run: |
           brew update --quiet
-          brew install --formula cmake || brew upgrade cmake
+          brew install cmake || brew upgrade cmake
           cmake --version
 
       # Установка зависимостей для Windows
       - name: Install Windows dependencies
         if: runner.os == 'Windows'
         shell: powershell
-        timeout-minutes: 20
+        timeout-minutes: 30
         run: |
           # Установка CMake
           $cmakeUrl = "https://github.com/Kitware/CMake/releases/download/v3.28.3/cmake-3.28.3-windows-x86_64.msi"
           $cmakeInstaller = "$env:RUNNER_TEMP\cmake-installer.msi"
-          try {
-              Write-Host "Downloading CMake..."
-              (New-Object System.Net.WebClient).DownloadFile($cmakeUrl, $cmakeInstaller)
 
-              Write-Host "Installing CMake..."
+          Write-Host "Downloading CMake..."
+          try {
+              (New-Object System.Net.WebClient).DownloadFile($cmakeUrl, $cmakeInstaller)
+          } catch {
+              Write-Error "Failed to download CMake: $_"
+              exit 1
+          }
+
+          Write-Host "Installing CMake..."
+          try {
               $process = Start-Process -FilePath "msiexec.exe" -ArgumentList "/i $cmakeInstaller /quiet /qn /norestart ADD_CMAKE_TO_PATH=System" -PassThru -Wait
               if ($process.ExitCode -ne 0) {
                   Write-Error "CMake installation failed with exit code $($process.ExitCode)"
@@ -71,8 +79,8 @@ jobs:
           }
 
           # Установка WiX
+          Write-Host "Installing WiX Toolset..."
           try {
-              Write-Host "Installing WiX Toolset..."
               choco install wixtoolset -y --no-progress --ignore-detected-reboot
               refreshenv
           } catch {
@@ -97,6 +105,7 @@ jobs:
       # Сборка проекта
       - name: Configure and Build
         shell: bash
+        timeout-minutes: 30
         run: |
           mkdir -p build
           cd build
@@ -135,22 +144,22 @@ jobs:
       - name: Create packages
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
+        timeout-minutes: 20
         run: |
           mkdir -p $ARTIFACTS_DIR/packages
           cd build
 
           case "$RUNNER_OS" in
             Linux)
-              cpack -G DEB
-              cpack -G RPM
-              cp *.deb *.rpm ../$ARTIFACTS_DIR/packages/ || echo "No DEB/RPM packages created"
+              cpack -G DEB && cp *.deb ../$ARTIFACTS_DIR/packages/ || echo "DEB package creation failed"
+              cpack -G RPM && cp *.rpm ../$ARTIFACTS_DIR/packages/ || echo "RPM package creation failed"
               ;;
             macOS)
-              cpack -G DragNDrop || cpack -G ZIP
-              # Явное копирование созданных файлов
-              for f in *.dmg *.zip; do
-                [ -e "$f" ] && cp "$f" ../$ARTIFACTS_DIR/packages/
-              done
+              if cpack -G DragNDrop; then
+                cp *.dmg ../$ARTIFACTS_DIR/packages/
+              else
+                cpack -G ZIP && cp *.zip ../$ARTIFACTS_DIR/packages/ || echo "Package creation failed"
+              fi
               ;;
             Windows)
               # Генерация GUIDs
@@ -173,17 +182,17 @@ jobs:
               cmake --build . --config Release
 
               # Создание MSI
-              cpack -G WIX -C Release || (echo "CPack failed, trying manual WiX build" && \
+              if cpack -G WIX -C Release; then
+                cp *.msi ../$ARTIFACTS_DIR/packages/
+              else
+                echo "CPack failed, trying manual WiX build"
                 candle.exe -arch x64 -out "installer.wixobj" "../installer.wxs" && \
-                light.exe -ext WixUIExtension -out "Solver-${{ github.ref_name }}.msi" "installer.wixobj")
+                light.exe -ext WixUIExtension -out "Solver-${{ github.ref_name }}.msi" "installer.wixobj" && \
+                cp *.msi ../$ARTIFACTS_DIR/packages/ || echo "Manual MSI creation failed"
+              fi
 
               # Создание ZIP
-              cpack -G ZIP
-
-              # Копирование с проверкой существования
-              for f in *.msi *.zip; do
-                [ -e "$f" ] && cp "$f" ../$ARTIFACTS_DIR/packages/
-              done
+              cpack -G ZIP && cp *.zip ../$ARTIFACTS_DIR/packages/ || echo "ZIP creation failed"
               ;;
           esac
 
