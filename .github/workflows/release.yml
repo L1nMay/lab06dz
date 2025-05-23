@@ -128,15 +128,18 @@ jobs:
               cpack -G DragNDrop || cpack -G ZIP || echo "Package creation failed"
               ;;
             Windows)
-              # Явная проверка WiX перед созданием MSI
+              # Явная проверка WiX и попытка создания MSI
               if command -v light.exe >/dev/null 2>&1; then
-                echo "WiX tools detected, attempting to create MSI package..."
-                cpack -G WIX -C Release || (echo "MSI creation failed with cpack, trying manual build" && \
+                echo "WiX tools detected, creating MSI package..."
+                # Сначала создаем конфигурацию для WiX
+                cmake .. -DCPACK_GENERATOR="WIX" -DCPACK_WIX_UPGRADE_GUID="PUT-GUID-HERE" -DCPACK_WIX_PRODUCT_GUID="PUT-GUID-HERE" -DCPACK_WIX_PATCH_GUID="PUT-GUID-HERE"
+                # Затем запускаем упаковку
+                cpack -G WIX -C Release || (echo "CPack MSI creation failed, trying manual build" && \
                   candle.exe ../installer.wxs -out installer.wixobj && \
-                  light.exe installer.wixobj -out Solver-${{ github.ref_name }}.msi || \
+                  light.exe -ext WixUIExtension installer.wixobj -out Solver-${{ github.ref_name }}.msi || \
                   echo "Manual MSI creation also failed")
               else
-                echo "WiX not found, cannot create MSI package"
+                echo "::error::WiX not found, cannot create MSI package"
               fi
               # Всегда создаем ZIP как fallback
               cpack -G ZIP || echo "ZIP package creation failed"
@@ -144,7 +147,6 @@ jobs:
           esac
           mkdir -p ../artifacts/packages
           cp *.deb *.rpm *.dmg *.msi *.zip ../artifacts/packages/ 2>/dev/null || :
-
       # Копирование бинарных файлов
       - name: Copy binaries
         shell: bash
@@ -173,8 +175,8 @@ jobs:
           case "$RUNNER_OS" in
             Linux)   ls -lh artifacts/packages/*.deb artifacts/packages/*.rpm 2>/dev/null || : ;;
             macOS)   ls -lh artifacts/packages/*.dmg artifacts/packages/*.zip 2>/dev/null || : ;;
-            Windows) 
-              ls -lh artifacts/packages/*.msi artifacts/packages/*.zip 2>/dev/null || : 
+            Windows)
+              ls -lh artifacts/packages/*.msi artifacts/packages/*.zip 2>/dev/null || :
               if [ -f artifacts/packages/*.msi ]; then
                 echo "MSI package created successfully"
               else
