@@ -32,7 +32,6 @@ jobs:
             cmake build-essential zip rpm \
             libjsoncpp-dev librhash-dev
           cmake --version
-
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
         shell: bash
@@ -40,7 +39,6 @@ jobs:
           brew update --quiet
           brew install --formula cmake || brew upgrade cmake
           cmake --version
-
       - name: Install Windows dependencies
         if: runner.os == 'Windows'
         shell: powershell
@@ -50,11 +48,13 @@ jobs:
           $cmakeInstaller = "$env:RUNNER_TEMP\cmake-installer.msi"
           (New-Object System.Net.WebClient).DownloadFile($cmakeUrl, $cmakeInstaller)
           Start-Process -FilePath "msiexec.exe" -ArgumentList "/i $cmakeInstaller /quiet /qn /norestart ADD_CMAKE_TO_PATH=System" -Wait
-
           # Установка WiX через Chocolatey
           choco install wixtoolset -y --no-progress --ignore-detected-reboot
           refreshenv
           cmake --version
+          # Проверка установки WiX
+          light.exe -version
+          candle.exe -version
 
       # Подготовка Windows-specific файлов
       - name: Prepare Windows files
@@ -67,6 +67,30 @@ jobs:
           fi
           if [ ! -f assets/icon.ico ]; then
             echo "Placeholder" > assets/icon.ico
+          fi
+          # Создание простого WXS файла, если его нет
+          if [ ! -f installer.wxs ]; then
+            cat << 'EOF' > installer.wxs
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+              <Product Id="*" Name="Solver" Language="1033" Version="${{ github.ref_name }}" Manufacturer="YourCompany" UpgradeCode="PUT-GUID-HERE">
+                <Package InstallerVersion="200" Compressed="yes" Comments="Windows Installer Package"/>
+                <Media Id="1" Cabinet="media1.cab" EmbedCab="yes"/>
+                <Directory Id="TARGETDIR" Name="SourceDir">
+                  <Directory Id="ProgramFilesFolder">
+                    <Directory Id="INSTALLDIR" Name="Solver">
+                      <Component Id="ApplicationFiles" Guid="PUT-GUID-HERE">
+                        <File Id="ApplicationFile" Source="build/Release/solver.exe"/>
+                      </Component>
+                    </Directory>
+                  </Directory>
+                </Directory>
+                <Feature Id="DefaultFeature" Level="1">
+                  <ComponentRef Id="ApplicationFiles"/>
+                </Feature>
+              </Product>
+            </Wix>
+            EOF
           fi
 
       # Сборка проекта
@@ -107,12 +131,18 @@ jobs:
               cpack -G DragNDrop || cpack -G ZIP || echo "Package creation failed"
               ;;
             Windows)
+              # Явная проверка WiX перед созданием MSI
               if command -v light.exe >/dev/null 2>&1; then
-                cpack -G WIX || cpack -G ZIP || echo "MSI creation failed"
+                echo "WiX tools detected, attempting to create MSI package..."
+                cpack -G WIX -C Release || (echo "MSI creation failed with cpack, trying manual build" && \
+                  candle.exe ../installer.wxs -out installer.wixobj && \
+                  light.exe installer.wixobj -out Solver-${{ github.ref_name }}.msi || \
+                  echo "Manual MSI creation also failed")
               else
-                cpack -G ZIP
-                echo "WiX not found, created ZIP package instead"
+                echo "WiX not found, cannot create MSI package"
               fi
+              # Всегда создаем ZIP как fallback
+              cpack -G ZIP || echo "ZIP package creation failed"
               ;;
           esac
           mkdir -p ../artifacts/packages
@@ -138,17 +168,22 @@ jobs:
         run: |
           echo "=== Artifacts structure ==="
           find artifacts/ -type f -exec ls -lh {} \;
-
           if [ ! -d "artifacts" ] || [ -z "$(ls -A artifacts/)" ]; then
             echo "::error::No artifacts were generated!"
             exit 1
           fi
-
           echo "=== Package contents ==="
           case "$RUNNER_OS" in
             Linux)   ls -lh artifacts/packages/*.deb artifacts/packages/*.rpm 2>/dev/null || : ;;
             macOS)   ls -lh artifacts/packages/*.dmg artifacts/packages/*.zip 2>/dev/null || : ;;
-            Windows) ls -lh artifacts/packages/*.msi artifacts/packages/*.zip 2>/dev/null || : ;;
+            Windows) 
+              ls -lh artifacts/packages/*.msi artifacts/packages/*.zip 2>/dev/null || : 
+              if [ -f artifacts/packages/*.msi ]; then
+                echo "MSI package created successfully"
+              else
+                echo "::warning::MSI package was not created"
+              fi
+              ;;
           esac
 
       # Загрузка артефактов
