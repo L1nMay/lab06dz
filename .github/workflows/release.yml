@@ -23,7 +23,7 @@ jobs:
           fetch-depth: 0
 
       # Установка зависимостей для Linux
-      - name: Install Linux dependencies
+      - name: Установка зависимостей (Linux)
         if: runner.os == 'Linux'
         shell: bash
         run: |
@@ -34,7 +34,7 @@ jobs:
           cmake --version
 
       # Установка зависимостей для macOS
-      - name: Install macOS dependencies
+      - name: Установка зависимостей (macOS)
         if: runner.os == 'macOS'
         shell: bash
         run: |
@@ -43,56 +43,48 @@ jobs:
           cmake --version
 
       # Установка зависимостей для Windows
-      - name: Install Windows dependencies
+      - name: Установка зависимостей (Windows)
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          # Установка WiX Toolset
           choco install wixtoolset -y --no-progress --ignore-detected-reboot
-          # Установка CMake
           choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
           refreshenv
-
-          # Проверка установленных инструментов
           Write-Host "CMake version:"
           cmake --version
           Write-Host "WiX version:"
           light.exe -version
           candle.exe -version
 
-      # Подготовка файлов для Windows
-      - name: Prepare Windows files
+      # Подготовка файлов для Windows (MSI)
+      - name: Подготовка файлов для MSI
         if: runner.os == 'Windows'
         shell: powershell
         run: |
           # Создаем необходимые директории
           New-Item -ItemType Directory -Path "assets" -Force | Out-Null
 
-          # Создаем LICENSE.rtf если его нет
-          if (-not (Test-Path "LICENSE.rtf")) {
-            @"
+          # Создаем LICENSE.rtf
+          $licenseRtf = @"
 {\rtf1\ansi\ansicpg1252\deff0\deflang1033{\fonttbl{\f0\fnil\fcharset0 Calibri;}}
 \viewkind4\uc1\pard\sa200\sl276\slmult1\lang9\f0\fs22 Sample License Text\par }
-"@ | Out-File -Encoding ASCII "LICENSE.rtf"
-          }
+"@
+          $licenseRtf | Out-File -Encoding ASCII "LICENSE.rtf"
 
-          # Создаем иконку если ее нет
-          if (-not (Test-Path "assets\icon.ico")) {
-            [byte[]]$iconBytes = 0x00,0x00,0x01,0x00,0x01,0x00,0x10,0x10,0x00,0x00,0x01,0x00,0x20,0x00,0x68,0x04,
-                                0x00,0x00,0x16,0x00,0x00,0x00,0x28,0x00,0x00,0x00,0x10,0x00,0x00,0x00,0x20,0x00,
-                                0x00,0x00,0x01,0x00,0x20,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-                                0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
-            [System.IO.File]::WriteAllBytes("assets\icon.ico", $iconBytes)
-          }
+          # Создаем иконку
+          [byte[]]$iconBytes = 0x00,0x00,0x01,0x00,0x01,0x00,0x10,0x10,0x00,0x00,0x01,0x00,0x20,0x00,0x68,0x04,
+                              0x00,0x00,0x16,0x00,0x00,0x00,0x28,0x00,0x00,0x00,0x10,0x00,0x00,0x00,0x20,0x00,
+                              0x00,0x00,0x01,0x00,0x20,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+                              0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+          [System.IO.File]::WriteAllBytes("assets\icon.ico", $iconBytes)
 
-          # Создаем WXS файл если его нет
-          if (-not (Test-Path "installer.wxs")) {
-            $guid1 = [guid]::NewGuid().ToString().ToUpper()
-            $guid2 = [guid]::NewGuid().ToString().ToUpper()
-            @"
+          # Создаем WXS файл
+          $guid1 = [guid]::NewGuid().ToString().ToUpper()
+          $guid2 = [guid]::NewGuid().ToString().ToUpper()
+          $wxsContent = @"
 <?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <Product Id="*" Name="Solver" Language="1033" Version="$env:GITHUB_REF_NAME" Manufacturer="YourCompany" UpgradeCode="$guid1">
+  <Product Id="*" Name="Solver" Language="1033" Version="$env:GITHUB_REF_NAME.Replace('v','')" Manufacturer="YourCompany" UpgradeCode="$guid1">
     <Package InstallerVersion="200" Compressed="yes" Comments="Windows Installer Package"/>
     <Media Id="1" Cabinet="media1.cab" EmbedCab="yes"/>
     <Directory Id="TARGETDIR" Name="SourceDir">
@@ -107,26 +99,28 @@ jobs:
     <Feature Id="DefaultFeature" Level="1">
       <ComponentRef Id="ApplicationFiles"/>
     </Feature>
+    <Icon Id="icon.ico" SourceFile="assets\icon.ico"/>
+    <Property Id="ARPPRODUCTICON" Value="icon.ico"/>
   </Product>
 </Wix>
-"@ | Out-File -Encoding UTF8 "installer.wxs"
-          }
+"@
+          $wxsContent | Out-File -Encoding UTF8 "installer.wxs"
 
       # Сборка проекта
-      - name: Configure and Build
+      - name: Сборка проекта
         shell: bash
         run: |
           mkdir -p build
           cd build
           if [ "$RUNNER_OS" = "Windows" ]; then
-            cmake .. -G "Visual Studio 17 2022" -A x64 -DCPACK_GENERATOR="WIX;ZIP"
+            cmake .. -G "Visual Studio 17 2022" -A x64
           else
             cmake .. -DCMAKE_BUILD_TYPE=Release
           fi
           cmake --build . --config Release --parallel 2
 
       # Создание исходников (только для тегов)
-      - name: Create source packages
+      - name: Создание исходных пакетов
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
@@ -135,64 +129,43 @@ jobs:
           git archive --format=zip -o "artifacts/source/Solver-${{ github.ref_name }}-src.zip" HEAD
 
       # Создание пакетов (только для тегов)
-      - name: Create packages
+      - name: Создание пакетов
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
           cd build
           case "$RUNNER_OS" in
             Linux)
-              cpack -G DEB || echo "DEB package creation failed"
-              cpack -G RPM || echo "RPM package creation failed"
+              cpack -G DEB
+              cpack -G RPM
               ;;
             macOS)
-              cpack -G DragNDrop || cpack -G ZIP || echo "Package creation failed"
+              cpack -G DragNDrop || cpack -G ZIP
               ;;
             Windows)
               # Создаем MSI через WiX
-              echo "Creating MSI package..."
-              candle.exe ../installer.wxs -out installer.wixobj || echo "WXS compilation failed"
-              light.exe -ext WixUIExtension installer.wixobj -out Solver-${{ github.ref_name }}.msi || echo "MSI linking failed"
-
+              candle.exe ../installer.wxs -out installer.wixobj
+              light.exe -ext WixUIExtension installer.wixobj -out Solver-${{ github.ref_name }}.msi
               # Создаем ZIP архив
-              echo "Creating ZIP package..."
-              cpack -G ZIP -C Release || echo "ZIP creation failed"
+              cpack -G ZIP -C Release
               ;;
           esac
           mkdir -p ../artifacts/packages
           cp *.deb *.rpm *.dmg *.msi *.zip ../artifacts/packages/ 2>/dev/null || :
 
       # Проверка результатов
-      - name: Verify artifacts
+      - name: Проверка артефактов
         shell: bash
         run: |
-          echo "=== Artifacts structure ==="
+          echo "=== Структура артефактов ==="
           find artifacts/ -type f -exec ls -lh {} \;
           if [ ! -d "artifacts" ] || [ -z "$(ls -A artifacts/)" ]; then
-            echo "::error::No artifacts were generated!"
+            echo "::error::Артефакты не были созданы!"
             exit 1
           fi
 
-          echo "=== Package contents ==="
-          case "$RUNNER_OS" in
-            Linux)
-              ls -lh artifacts/packages/*.deb artifacts/packages/*.rpm 2>/dev/null || :
-              ;;
-            macOS)
-              ls -lh artifacts/packages/*.dmg artifacts/packages/*.zip 2>/dev/null || :
-              ;;
-            Windows)
-              ls -lh artifacts/packages/*.msi artifacts/packages/*.zip 2>/dev/null || :
-              if [ -f artifacts/packages/*.msi ]; then
-                echo "MSI package created successfully"
-              else
-                echo "::warning::MSI package was not created"
-              fi
-              ;;
-          esac
-
       # Загрузка артефактов
-      - name: Upload artifacts
+      - name: Загрузка артефактов
         uses: actions/upload-artifact@v4
         with:
           name: Solver-${{ runner.os }}
@@ -200,7 +173,7 @@ jobs:
           retention-days: 7
 
       # Создание релиза (только для тегов)
-      - name: Create Release
+      - name: Создание релиза
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
         env:
@@ -211,12 +184,13 @@ jobs:
           files: |
             artifacts/source/*
             artifacts/packages/*
-            artifacts/binaries/*
           draft: false
           prerelease: false
           fail_on_unmatched_files: false
           body: |
-            Automated release for version ${{ github.ref_name }}
-            ### Assets:
-            - Binary packages (.deb, .rpm, .dmg, .msi, .zip)
-            - Source code archives
+            Автоматический релиз версии ${{ github.ref_name }}
+            ### Доступные пакеты:
+            - Исходный код (.tar.gz, .zip)
+            - Пакеты для Linux (.deb, .rpm)
+            - Пакет для macOS (.dmg)
+            - Пакет для Windows (.msi)
