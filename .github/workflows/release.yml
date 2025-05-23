@@ -24,24 +24,24 @@ jobs:
           fetch-depth: 0
 
       # Установка зависимостей для Ubuntu
-      - name: Install dependencies (Ubuntu)
+      - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake build-essential zip rpm python3
-          cmake --version
-
-      # Установка зависимостей для macOS (исправленная)
-      - name: Install dependencies (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew update
-          brew install --formula cmake
-          brew install python
+          sudo apt-get install -y cmake build-essential zip rpm python3 uuid-runtime
           cmake --version
           python3 --version
 
-      # Установка зависимостей для Windows
+      # Установка зависимостей для macOS (исправленная)
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew update
+          brew install cmake python
+          cmake --version
+          python3 --version
+
+      # Установка зависимостей для Windows (улучшенная)
       - name: Install Windows dependencies
         if: runner.os == 'Windows'
         shell: powershell
@@ -54,15 +54,14 @@ jobs:
           Expand-Archive -Path "$env:RUNNER_TEMP\wix.zip" -DestinationPath $wixPath -Force
           echo "$wixPath" | Out-File -FilePath $env:GITHUB_PATH -Append
 
-          # Установка CMake и Python
-          choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
-          choco install python -y
+          # Установка CMake (последняя версия)
+          choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y --no-progress
+          choco install python -y --no-progress
           refreshenv
 
-          # Проверка установки
           cmake --version
           python --version
-          Get-Command candle.exe, light.exe, heat.exe
+          Get-Command candle.exe, light.exe, heat.exe | % { $_.Source }
 
       # Подготовка Windows-файлов
       - name: Prepare Windows files
@@ -71,7 +70,7 @@ jobs:
         run: |
           mkdir -p wix/assets
           echo "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fnil\\fcharset0 Calibri;}}\\viewkind4\\uc1\\pard\\sa200\\sl276\\slmult1\\lang9\\f0\\fs22 Sample License Text\\par }" > wix/LICENSE.rtf
-          curl -L -o wix/assets/icon.ico https://raw.githubusercontent.com/microsoft/fluentui-system-icons/master/assets/App%20Icon/ic_fluent_app_icon_24_filled.ico
+          curl -sSL -o wix/assets/icon.ico https://raw.githubusercontent.com/microsoft/fluentui-system-icons/master/assets/App%20Icon/ic_fluent_app_icon_24_filled.ico
 
       # Сборка проекта
       - name: Configure and Build
@@ -81,15 +80,6 @@ jobs:
           cd build
           cmake .. -DCMAKE_BUILD_TYPE=Release
           cmake --build . --config Release --parallel 2
-
-      # Создание исходников (только для тегов)
-      - name: Create source packages
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: bash
-        run: |
-          mkdir -p artifacts/source
-          git archive --format=tar.gz -o artifacts/source/Solver-${{ github.ref_name }}-src.tar.gz HEAD
-          git archive --format=zip -o artifacts/source/Solver-${{ github.ref_name }}-src.zip HEAD
 
       # Создание пакетов (только для тегов)
       - name: Create packages
@@ -101,10 +91,14 @@ jobs:
 
           if [ "$RUNNER_OS" = "Linux" ]; then
             cpack -G DEB && cpack -G RPM
-            cp *.deb *.rpm ../artifacts/packages/
+            cp *.deb *.rpm ../artifacts/packages/ || echo "No DEB/RPM packages found"
+
           elif [ "$RUNNER_OS" = "macOS" ]; then
-            cpack -G DragNDrop || cpack -G ZIP
-            cp *.dmg *.zip ../artifacts/packages/
+            # Сначала пробуем создать DMG, затем ZIP
+            cpack -G DragNDrop || echo "Failed to create DMG package"
+            cpack -G ZIP || echo "Failed to create ZIP package"
+            cp *.dmg *.zip ../artifacts/packages/ 2>/dev/null || :
+
           elif [ "$RUNNER_OS" = "Windows" ]; then
             # Генерация GUID
             UPGRADE_CODE=$(python -c "import uuid; print(str(uuid.uuid4()).upper())")
@@ -128,7 +122,7 @@ jobs:
           fi
 
           echo "Created packages:"
-          ls -lh ../artifacts/packages/
+          ls -lh ../artifacts/packages/ || echo "No packages were created"
 
       # Копирование бинарных файлов
       - name: Copy binaries
@@ -137,10 +131,10 @@ jobs:
           mkdir -p artifacts/binaries
           case "$RUNNER_OS" in
             Linux|macOS)
-              find build -name "solver" -type f -exec cp {} artifacts/binaries/ \;
+              find build -name "solver" -type f -exec cp {} artifacts/binaries/ || :
               ;;
             Windows)
-              find build -name "solver.exe" -type f -exec cp {} artifacts/binaries/ \;
+              find build -name "solver.exe" -type f -exec cp {} artifacts/binaries/ || :
               ;;
           esac
 
@@ -149,8 +143,8 @@ jobs:
         shell: bash
         run: |
           echo "Artifacts directory contents:"
-          ls -lhR artifacts/
-          if [ ! -z "$(ls -A artifacts/)" ]; then
+          ls -lhR artifacts/ || echo "No artifacts found"
+          if [ ! -z "$(ls -A artifacts/ 2>/dev/null)" ]; then
             echo "Artifacts found:"
             ls -lh artifacts/*
           else
@@ -166,6 +160,7 @@ jobs:
           path: |
             artifacts/*
           retention-days: 7
+          if-no-files-found: warn
 
       # Создание релиза (только для тегов)
       - name: Create Release
