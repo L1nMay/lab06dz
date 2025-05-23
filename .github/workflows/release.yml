@@ -2,6 +2,7 @@ name: Release Pipeline
 
 on:
   push:
+    branches: [main]
     tags: ['v*.*.*']
 
 permissions:
@@ -28,7 +29,7 @@ jobs:
       - name: Install dependencies (Ubuntu)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
+          sudo apt-get update || true
           sudo apt-get install -y cmake build-essential zip rpm
           cmake --version
 
@@ -40,30 +41,46 @@ jobs:
           brew install --formula cmake
           cmake --version
 
-      # Установка WiX и CMake для Windows
+      # Установка зависимостей для Windows
       - name: Install Windows dependencies
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          choco install wixtoolset cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y --no-progress
-          refreshenv
-          cmake --version
-          heat.exe -?
+          $ErrorActionPreference = 'Stop'
+          try {
+              # Установка Chocolatey если нужно
+              if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
+                  Set-ExecutionPolicy Bypass -Scope Process -Force
+                  [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+                  iwr https://community.chocolatey.org/install.ps1 -UseBasicParsing | iex
+              }
 
-      # Подготовка файлов для Windows
-      - name: Prepare Windows assets
-        if: runner.os == 'Windows'
+              # Установка CMake и WiX
+              choco install cmake --version=3.28.1 -y --no-progress
+              choco install wixtoolset -y --no-progress --force
+              refreshenv
+              cmake --version
+              heat.exe -?
+          } catch {
+              Write-Error "Failed to install dependencies: $_"
+              exit 1
+          }
+
+      # Подготовка файлов для всех ОС
+      - name: Prepare assets
         shell: bash
         run: |
-          # Создаем минимальные необходимые файлы
-          mkdir -p assets
+          # Создаем минимальный LICENSE.rtf если его нет
           if [ ! -f LICENSE.rtf ]; then
-            echo "{\\rtf1\\ansi\\ansicpg1251\\deff0\\deflang1049{\\fonttbl{\\f0\\fnil\\fcharset0 Calibri;}}" > LICENSE.rtf
-            echo "{\\colortbl ;\\red0\\green0\\blue0;}" >> LICENSE.rtf
-            echo "\\viewkind4\\uc1\\pard\\sa200\\sl276\\slmult1\\lang1033\\f0\\fs22\\cf1 Sample License Text\\par }" >> LICENSE.rtf
+              echo "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fnil\\fcharset0 Calibri;}}\\viewkind4\\uc1\\pard\\sa200\\sl276\\slmult1\\lang9\\f0\\fs22 Sample License Text\\par }" > LICENSE.rtf
           fi
-          if [ ! -f assets/icon.ico ]; then
-            convert -size 256x256 xc:black assets/icon.ico || echo "Placeholder icon created"
+
+          # Создаем assets директорию если ее нет
+          mkdir -p assets
+
+          # Для Windows создаем иконку если ее нет
+          if [ "$RUNNER_OS" = "Windows" ] && [ ! -f assets/icon.ico ]; then
+              echo "Placeholder icon" > assets/icon.ico
           fi
 
       # Сборка проекта
@@ -72,35 +89,52 @@ jobs:
         run: |
           mkdir -p build
           cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release -DVERSION=${{ env.VERSION }}
+          if [ "$RUNNER_OS" = "Windows" ]; then
+              cmake .. -DCMAKE_BUILD_TYPE=Release \
+                  -DCPACK_WIX_UPGRADE_GUID="$(uuidgen || echo '00000000-0000-0000-0000-000000000000')" \
+                  -DCPACK_WIX_PRODUCT_GUID="$(uuidgen || echo '11111111-1111-1111-1111-111111111111')" \
+                  -DCPACK_WIX_LICENSE_RTF="../LICENSE.rtf" \
+                  -DCPACK_WIX_PRODUCT_ICON="../assets/icon.ico"
+          else
+              cmake .. -DCMAKE_BUILD_TYPE=Release
+          fi
           cmake --build . --config Release --parallel 2
 
-      # Создание исходников
+      # Создание исходников (только для тегов)
       - name: Create source packages
+        if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
           mkdir -p artifacts/source
           git archive --format=tar.gz -o artifacts/source/Solver-${{ env.VERSION }}-src.tar.gz HEAD
           git archive --format=zip -o artifacts/source/Solver-${{ env.VERSION }}-src.zip HEAD
 
-      # Создание пакетов
+      # Создание пакетов (только для тегов)
       - name: Create packages
+        if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
+          mkdir -p artifacts/packages
           cd build
+
           if [ "$RUNNER_OS" = "Linux" ]; then
-            cpack -G DEB && cpack -G RPM
+              cpack -G DEB && cpack -G RPM
+              cp *.deb *.rpm ../artifacts/packages/
+
           elif [ "$RUNNER_OS" = "macOS" ]; then
-            cpack -G DragNDrop || cpack -G ZIP
+              cpack -G DragNDrop || cpack -G ZIP
+              cp *.dmg *.zip ../artifacts/packages/ 2>/dev/null || :
+
           elif [ "$RUNNER_OS" = "Windows" ]; then
-            cpack -G WIX
-            if [ ! -f *.msi ]; then
-              echo "MSI creation failed, falling back to ZIP"
-              cpack -G ZIP
-            fi
+              # Создаем MSI пакет
+              cpack -G WIX
+              cp *.msi ../artifacts/packages/
+
+              # Дополнительно создаем ZIP с бинарником
+              mkdir -p solver-${{ env.VERSION }}-win64
+              cp Release/solver.exe solver-${{ env.VERSION }}-win64/
+              zip -r ../artifacts/packages/solver-${{ env.VERSION }}-win64.zip solver-${{ env.VERSION }}-win64
           fi
-          mkdir -p ../artifacts/packages
-          cp *.deb *.rpm *.dmg *.msi *.zip ../artifacts/packages/ 2>/dev/null || :
 
       # Копирование бинарных файлов
       - name: Copy binaries
@@ -109,10 +143,10 @@ jobs:
           mkdir -p artifacts/binaries
           case "$RUNNER_OS" in
             Linux|macOS)
-              find build -name "solver" -type f -exec cp {} artifacts/binaries/ \;
+              find build -name "solver" -type f -exec cp {} artifacts/binaries/solver-${{ env.VERSION }} \;
               ;;
             Windows)
-              find build -name "solver.exe" -type f -exec cp {} artifacts/binaries/ \;
+              find build -name "solver.exe" -type f -exec cp {} artifacts/binaries/solver-${{ env.VERSION }}.exe \;
               ;;
           esac
 
@@ -132,9 +166,9 @@ jobs:
           path: artifacts/*
           retention-days: 7
 
-      # Создание релиза
+      # Создание релиза (только для тегов)
       - name: Create GitHub Release
-        if: success()
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -147,3 +181,4 @@ jobs:
             artifacts/binaries/*
           draft: false
           prerelease: false
+          fail_on_unmatched_files: false
