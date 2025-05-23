@@ -31,15 +31,16 @@ jobs:
           sudo apt-get install -y cmake build-essential zip rpm python3 uuid-runtime
           cmake --version
 
-      # Установка зависимостей для macOS
+      # Установка зависимостей для macOS (без предупреждений)
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
         run: |
           brew update
-          brew install cmake python
+          brew install --formula cmake
+          brew install python
           cmake --version
 
-      # Установка зависимостей для Windows
+      # Установка зависимостей для Windows (исправленная)
       - name: Install Windows dependencies
         if: runner.os == 'Windows'
         shell: powershell
@@ -52,10 +53,21 @@ jobs:
           Expand-Archive -Path "$env:RUNNER_TEMP\wix.zip" -DestinationPath $wixPath -Force
           echo "$wixPath" | Out-File -FilePath $env:GITHUB_PATH -Append
 
-          # Установка CMake и Python
-          choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y --no-progress
-          choco install python -y --no-progress
+          # Установка CMake с явным добавлением в PATH
+          choco install cmake.install --params='ADD_CMAKE_TO_PATH=System' -y --no-progress
+          choco install cmake -y --no-progress
+
+          # Установка Python (явно указываем версию 3.9 для совместимости)
+          choco install python --version=3.9.13 -y --no-progress
+
+          # Обновление PATH
+          Import-Module "$env:ChocolateyInstall\helpers\chocolateyProfile.psm1"
           refreshenv
+
+          # Проверка установки
+          cmake --version
+          python --version
+          Get-Command candle.exe, light.exe, heat.exe | % { $_.Source }
 
       # Подготовка Windows-файлов
       - name: Prepare Windows files
@@ -66,12 +78,12 @@ jobs:
           echo "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fnil\\fcharset0 Calibri;}}\\viewkind4\\uc1\\pard\\sa200\\sl276\\slmult1\\lang9\\f0\\fs22 Sample License Text\\par }" > wix/LICENSE.rtf
           curl -sSL -o wix/icon.ico https://raw.githubusercontent.com/microsoft/fluentui-system-icons/master/assets/App%20Icon/ic_fluent_app_icon_24_filled.ico
 
-          # WXS-файл с фиксированной версией
+          # WXS-файл с шаблонными значениями
           cat << 'EOF' > wix/installer.wxs
           <?xml version="1.0"?>
           <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
             <Product Id="*" Name="Solver" Language="1033" Version="1.0.0"
-                   Manufacturer="Your Company" UpgradeCode="PUT-GUID-HERE">
+                   Manufacturer="Your Company" UpgradeCode="PUT-UPGRADE-CODE-HERE">
               <Package InstallerVersion="200" Compressed="yes" Comments="Windows Installer Package"/>
               <Media Id="1" Cabinet="media1.cab" EmbedCab="yes"/>
               <Directory Id="TARGETDIR" Name="SourceDir">
@@ -112,7 +124,7 @@ jobs:
 
           if [ "$RUNNER_OS" = "Linux" ]; then
             cpack -G DEB && cpack -G RPM
-            cp *.deb *.rpm ../artifacts/packages/ || echo "No DEB/RPM packages created"
+            cp *.deb *.rpm ../artifacts/packages/ || :
 
           elif [ "$RUNNER_OS" = "macOS" ]; then
             cpack -G ZIP
@@ -124,7 +136,7 @@ jobs:
             UPGRADE_CODE=$(python -c "import uuid; print(str(uuid.uuid4()).upper())")
 
             # Подготовка WXS файла
-            sed -i "s|PUT-GUID-HERE|$UPGRADE_CODE|g" ../wix/installer.wxs
+            sed -i "s|PUT-UPGRADE-CODE-HERE|$UPGRADE_CODE|g" ../wix/installer.wxs
             sed -i "s|PUT-SOURCE-PATH-HERE|$(pwd)/Release/solver.exe|g" ../wix/installer.wxs
             sed -i "s|PUT-ICON-PATH-HERE|$(pwd)/../wix/icon.ico|g" ../wix/installer.wxs
             sed -i "s|PUT-LICENSE-PATH-HERE|$(pwd)/../wix/LICENSE.rtf|g" ../wix/installer.wxs
@@ -140,7 +152,7 @@ jobs:
           fi
 
           echo "Created packages:"
-          ls -lh ../artifacts/packages/ || echo "No packages were created"
+          ls -lh ../artifacts/packages/ || :
 
       # Копирование бинарных файлов (только для тегов)
       - name: Copy binaries
