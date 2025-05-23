@@ -1,51 +1,55 @@
-cmake_minimum_required(VERSION 3.15)
-project(Solver VERSION 1.1.6 LANGUAGES CXX)
-
-# Базовые настройки
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_DEBUG_POSTFIX "_d")
-
-# Исходные файлы
-add_executable(solver src/main.cpp)
-
-# Настройки установки
-install(TARGETS solver
-  RUNTIME DESTINATION bin
-  BUNDLE DESTINATION bin
+cmake_minimum_required(VERSION 3.20)
+project(Solver
+    VERSION 1.0.0
+    DESCRIPTION "Equation Solver Application"
+    LANGUAGES CXX
 )
 
-# Настройки CPack
-include(InstallRequiredSystemLibraries)
-set(CPACK_PACKAGE_NAME "${PROJECT_NAME}")
-set(CPACK_PACKAGE_VENDOR "Your Company")
-set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
-set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Solver application")
-set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/LICENSE.rtf")
+# Настройки компилятора
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Настройки для Windows (WIX)
-if(WIN32)
-  set(CPACK_GENERATOR "WIX")
-  set(CPACK_WIX_UPGRADE_GUID "YOUR-GUID-HERE") # Сгенерируйте новый GUID
-  set(CPACK_WIX_PRODUCT_ICON "${CMAKE_SOURCE_DIR}/assets/icon.ico")
-  set(CPACK_WIX_UI_BANNER "${CMAKE_SOURCE_DIR}/assets/banner.bmp")
-  set(CPACK_WIX_UI_DIALOG "${CMAKE_SOURCE_DIR}/assets/dialog.bmp")
-  set(CPACK_WIX_CULTURES "en-us")
-  set(CPACK_WIX_EXTRA_SOURCES "${CMAKE_SOURCE_DIR}/assets/extra.wxs")
+# Разные флаги для разных компиляторов
+if(MSVC)
+    # Настройки для Visual Studio
+    add_compile_options(/W4 /WX)
+else()
+    # Настройки для GCC/Clang
+    add_compile_options(-Wall -Wextra -Wpedantic -Werror)
 endif()
 
-# Настройки для Linux
+# Исходные файлы
+set(SOURCES src/main.cpp)
+set(HEADERS include/solver.h)
+
+# Исполняемый файл
+add_executable(solver ${SOURCES} ${HEADERS})
+target_include_directories(solver PUBLIC include)
+
+# Для Linux: связываем с математической библиотекой
 if(UNIX AND NOT APPLE)
-  set(CPACK_GENERATOR "DEB;RPM")
-  set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Your Name <your.email@example.com>")
-  set(CPACK_DEBIAN_PACKAGE_DEPENDS "libc6 (>= 2.14)")
+    target_link_libraries(solver PUBLIC m)
 endif()
 
-# Настройки для macOS
-if(APPLE)
-  set(CPACK_GENERATOR "DragNDrop")
-  set(CPACK_DMG_VOLUME_NAME "Solver")
-  set(CPACK_DMG_DS_STORE "${CMAKE_SOURCE_DIR}/assets/DS_Store")
+# Установка для CPack
+install(TARGETS solver DESTINATION bin)
+
+# Настройки CPack
+set(CPACK_PACKAGE_NAME "${PROJECT_NAME}")
+set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+set(CPACK_PACKAGE_DESCRIPTION "Simple equation solver")
+set(CPACK_PACKAGE_VENDOR "Your Organization")
+set(CPACK_PACKAGE_CONTACT "contact@example.com")
+set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/LICENSE")
+set(CPACK_PACKAGE_FILE_NAME "${PROJECT_NAME}-${PROJECT_VERSION}-${CMAKE_SYSTEM_NAME}")
+
+# Разные генераторы для разных систем
+if(WIN32)
+    set(CPACK_GENERATOR "WIX;ZIP")
+elseif(APPLE)
+    set(CPACK_GENERATOR "DragNDrop;ZIP")
+else()
+    set(CPACK_GENERATOR "DEB;RPM;TGZ")
 endif()
 
 include(CPack)
