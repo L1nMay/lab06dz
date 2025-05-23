@@ -22,7 +22,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Установка зависимостей с разделением по ОС
+      # Установка зависимостей
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         shell: bash
@@ -30,8 +30,9 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             cmake build-essential zip rpm \
-            libjsoncpp-dev librhash-dev
+            libjsoncpp-dev librhash-dev uuid-runtime
           cmake --version
+
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
         shell: bash
@@ -39,57 +40,27 @@ jobs:
           brew update --quiet
           brew install --formula cmake || brew upgrade cmake
           cmake --version
+
       - name: Install Windows dependencies
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          # Установка CMake через прямой download
-          $cmakeUrl = "https://github.com/Kitware/CMake/releases/download/v3.28.3/cmake-3.28.3-windows-x86_64.msi"
-          $cmakeInstaller = "$env:RUNNER_TEMP\cmake-installer.msi"
-          (New-Object System.Net.WebClient).DownloadFile($cmakeUrl, $cmakeInstaller)
-          Start-Process -FilePath "msiexec.exe" -ArgumentList "/i $cmakeInstaller /quiet /qn /norestart ADD_CMAKE_TO_PATH=System" -Wait
-          # Установка WiX через Chocolatey
           choco install wixtoolset -y --no-progress --ignore-detected-reboot
           refreshenv
-          cmake --version
-          # Проверка установки WiX
+          Write-Host "WiX version:"
           light.exe -version
           candle.exe -version
 
-      # Подготовка Windows-specific файлов
+      # Подготовка файлов для Windows
       - name: Prepare Windows files
         if: runner.os == 'Windows'
         shell: bash
         run: |
           mkdir -p assets
-          if [ ! -f LICENSE.rtf ]; then
-            echo "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fnil\\fcharset0 Calibri;}}\\viewkind4\\uc1\\pard\\sa200\\sl276\\slmult1\\lang9\\f0\\fs22 Sample License Text\\par }" > LICENSE.rtf
-          fi
-          if [ ! -f assets/icon.ico ]; then
-            echo "Placeholder" > assets/icon.ico
-          fi
-          # Создание простого WXS файла, если его нет
-          if [ ! -f installer.wxs ]; then
-            echo '<?xml version="1.0" encoding="UTF-8"?>' > installer.wxs
-            echo '<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">' >> installer.wxs
-            echo '  <Product Id="*" Name="Solver" Language="1033" Version="${{ github.ref_name }}" Manufacturer="YourCompany" UpgradeCode="PUT-GUID-HERE">' >> installer.wxs
-            echo '    <Package InstallerVersion="200" Compressed="yes" Comments="Windows Installer Package"/>' >> installer.wxs
-            echo '    <Media Id="1" Cabinet="media1.cab" EmbedCab="yes"/>' >> installer.wxs
-            echo '    <Directory Id="TARGETDIR" Name="SourceDir">' >> installer.wxs
-            echo '      <Directory Id="ProgramFilesFolder">' >> installer.wxs
-            echo '        <Directory Id="INSTALLDIR" Name="Solver">' >> installer.wxs
-            echo '          <Component Id="ApplicationFiles" Guid="PUT-GUID-HERE">' >> installer.wxs
-            echo '            <File Id="ApplicationFile" Source="build/Release/solver.exe"/>' >> installer.wxs
-            echo '          </Component>' >> installer.wxs
-            echo '        </Directory>' >> installer.wxs
-            echo '      </Directory>' >> installer.wxs
-            echo '    </Directory>' >> installer.wxs
-            echo '    <Feature Id="DefaultFeature" Level="1">' >> installer.wxs
-            echo '      <ComponentRef Id="ApplicationFiles"/>' >> installer.wxs
-            echo '    </Feature>' >> installer.wxs
-            echo '  </Product>' >> installer.wxs
-            echo '</Wix>' >> installer.wxs
-          fi
+          # Создаем минимальные необходимые файлы
+          echo "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fnil\\fcharset0 Calibri;}}\\viewkind4\\uc1\\pard\\sa200\\sl276\\slmult1\\lang9\\f0\\fs22 Sample License Text\\par }" > LICENSE.rtf
+          echo "Placeholder" > assets/icon.ico
+
       # Сборка проекта
       - name: Configure and Build
         shell: bash
@@ -97,12 +68,11 @@ jobs:
           mkdir -p build
           cd build
           if [ "$RUNNER_OS" = "Windows" ]; then
-            cmake .. -G "Visual Studio 17 2022" -A x64
-            cmake --build . --config Release -- /maxcpucount:2
+            cmake .. -G "Visual Studio 17 2022" -A x64 -DCPACK_GENERATOR="WIX;ZIP" -DCPACK_WIX_UPGRADE_GUID="$(uuidgen)" -DCPACK_WIX_PRODUCT_GUID="$(uuidgen)"
           else
             cmake .. -DCMAKE_BUILD_TYPE=Release
-            cmake --build . --config Release --parallel 2
           fi
+          cmake --build . --config Release --parallel 2
 
       # Создание исходников (только для тегов)
       - name: Create source packages
@@ -128,25 +98,21 @@ jobs:
               cpack -G DragNDrop || cpack -G ZIP || echo "Package creation failed"
               ;;
             Windows)
-              # Явная проверка WiX и попытка создания MSI
-              if command -v light.exe >/dev/null 2>&1; then
-                echo "WiX tools detected, creating MSI package..."
-                # Сначала создаем конфигурацию для WiX
-                cmake .. -DCPACK_GENERATOR="WIX" -DCPACK_WIX_UPGRADE_GUID="PUT-GUID-HERE" -DCPACK_WIX_PRODUCT_GUID="PUT-GUID-HERE" -DCPACK_WIX_PATCH_GUID="PUT-GUID-HERE"
-                # Затем запускаем упаковку
-                cpack -G WIX -C Release || (echo "CPack MSI creation failed, trying manual build" && \
-                  candle.exe ../installer.wxs -out installer.wixobj && \
-                  light.exe -ext WixUIExtension installer.wixobj -out Solver-${{ github.ref_name }}.msi || \
-                  echo "Manual MSI creation also failed")
-              else
-                echo "::error::WiX not found, cannot create MSI package"
+              echo "Creating Windows packages..."
+              # Пытаемся создать MSI через CPack
+              if ! cpack -G WIX -C Release; then
+                echo "CPack WIX failed, trying manual build..."
+                # Вручную создаем MSI если CPack не сработал
+                candle.exe ../CMakeFiles/*.wxs -out installer.wixobj || echo "WXS compilation failed"
+                light.exe -ext WixUIExtension installer.wixobj -out Solver-${{ github.ref_name }}.msi || echo "MSI linking failed"
               fi
-              # Всегда создаем ZIP как fallback
-              cpack -G ZIP || echo "ZIP package creation failed"
+              # Всегда создаем ZIP
+              cpack -G ZIP -C Release || echo "ZIP creation failed"
               ;;
           esac
           mkdir -p ../artifacts/packages
           cp *.deb *.rpm *.dmg *.msi *.zip ../artifacts/packages/ 2>/dev/null || :
+
       # Копирование бинарных файлов
       - name: Copy binaries
         shell: bash
@@ -177,13 +143,27 @@ jobs:
             macOS)   ls -lh artifacts/packages/*.dmg artifacts/packages/*.zip 2>/dev/null || : ;;
             Windows)
               ls -lh artifacts/packages/*.msi artifacts/packages/*.zip 2>/dev/null || :
-              if [ -f artifacts/packages/*.msi ]; then
+              if ls artifacts/packages/*.msi 1> /dev/null 2>&1; then
                 echo "MSI package created successfully"
               else
-                echo "::warning::MSI package was not created"
+                echo "::error::MSI package was not created"
+                exit 1
               fi
               ;;
           esac
+
+      # Дополнительная проверка для Windows
+      - name: Verify MSI package (Windows)
+        if: runner.os == 'Windows' && startsWith(github.ref, 'refs/tags/')
+        shell: powershell
+        run: |
+          $msi = Get-ChildItem artifacts\packages\*.msi
+          if (-not $msi) {
+            Write-Error "No MSI package found!"
+            exit 1
+          }
+          Write-Host "MSI package verified: $($msi.FullName)"
+          Write-Host "File size: $($msi.Length/1KB) KB"
 
       # Загрузка артефактов
       - name: Upload artifacts
@@ -212,5 +192,5 @@ jobs:
           body: |
             Automated release for version ${{ github.ref_name }}
             ### Assets:
-            - Binary packages
+            - Binary packages (.deb, .rpm, .dmg, .msi, .zip)
             - Source code archives
