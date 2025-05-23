@@ -22,98 +22,85 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Установка зависимостей для Ubuntu
-      - name: Install dependencies (Ubuntu)
-        if: runner.os == 'Linux'
+      # Установка зависимостей
+      - name: Install dependencies
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake build-essential zip rpm
+          case "$RUNNER_OS" in
+            Linux)
+              sudo apt-get update
+              sudo apt-get install -y cmake build-essential zip rpm
+              ;;
+            macOS)
+              brew update
+              brew install cmake
+              ;;
+            Windows)
+              choco install cmake --version=3.28.1 -y
+              choco install wixtoolset -y
+              ;;
+          esac
           cmake --version
-      # Установка зависимостей для macOS
-      - name: Install dependencies (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew update
-          brew install --formula cmake
-          cmake --version
-      # Установка зависимостей для Windows с улучшенной обработкой ошибок
-      - name: Install dependencies (Windows)
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $ProgressPreference = 'SilentlyContinue'
-          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-          try {
-            if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
-              Set-ExecutionPolicy Bypass -Scope Process -Force
-              [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-              iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-            }
-            choco install cmake --version=3.28.1 -y --no-progress --fail-on-error-output --timeout 900
-            choco install wixtoolset -y --no-progress
-            refreshenv
-            cmake --version
-          } catch {
-            Write-Error "Failed to install dependencies: $_"
-            exit 1
-          }
+
       # Подготовка Windows-specific файлов
       - name: Prepare Windows files
         if: runner.os == 'Windows'
         shell: bash
         run: |
+          # Создаем минимальные необходимые файлы для WiX
+          mkdir -p assets
           if [ ! -f LICENSE.rtf ]; then
             echo "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fnil\\fcharset0 Calibri;}}\\viewkind4\\uc1\\pard\\sa200\\sl276\\slmult1\\lang9\\f0\\fs22 Sample License Text\\par }" > LICENSE.rtf
           fi
-          mkdir -p assets
           if [ ! -f assets/icon.ico ]; then
-            echo "Placeholder icon" > assets/icon.ico
+            convert -size 64x64 xc:white assets/icon.ico || echo "Placeholder" > assets/icon.ico
           fi
+          if [ ! -f assets/wix_banner.bmp ]; then
+            convert -size 493x58 xc:gray assets/wix_banner.bmp || echo "Placeholder" > assets/wix_banner.bmp
+          fi
+          if [ ! -f assets/wix_dialog.bmp ]; then
+            convert -size 493x312 xc:gray assets/wix_dialog.bmp || echo "Placeholder" > assets/wix_dialog.bmp
+          fi
+
       # Сборка проекта
       - name: Configure and Build
         shell: bash
         run: |
           mkdir -p build
           cd build
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            cmake .. -DCMAKE_BUILD_TYPE=Release \
-              -DCPACK_WIX_UPGRADE_GUID="$(uuidgen || echo '00000000-0000-0000-0000-000000000000')" \
-              -DCPACK_WIX_PRODUCT_GUID="$(uuidgen || echo '11111111-1111-1111-1111-111111111111')" \
-              -DCPACK_WIX_LICENSE_RTF="../LICENSE.rtf" \
-              -DCPACK_WIX_PRODUCT_ICON="../assets/icon.ico"
-          else
-            cmake .. -DCMAKE_BUILD_TYPE=Release
-          fi
+          cmake .. -DCMAKE_BUILD_TYPE=Release
           cmake --build . --config Release --parallel 2
+
       # Создание исходников (только для тегов)
       - name: Create source packages
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
           mkdir -p artifacts/source
-          git archive --format=tar.gz -o artifacts/source/Solver-${{ github.ref_name }}-src.tar.gz HEAD
-          git archive --format=zip -o artifacts/source/Solver-${{ github.ref_name }}-src.zip HEAD
+          git archive --format=tar.gz -o "artifacts/source/Solver-${{ github.ref_name }}-src.tar.gz" HEAD
+          git archive --format=zip -o "artifacts/source/Solver-${{ github.ref_name }}-src.zip" HEAD
+
       # Создание пакетов (только для тегов)
       - name: Create packages
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
           cd build
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            cpack -G DEB && cpack -G RPM
-          elif [ "$RUNNER_OS" = "macOS" ]; then
-            cpack -G DragNDrop || cpack -G ZIP
-          elif [ "$RUNNER_OS" = "Windows" ]; then
-            if command -v heat.exe >/dev/null 2>&1; then
+          case "$RUNNER_OS" in
+            Linux)
+              cpack -G DEB && cpack -G RPM
+              ;;
+            macOS)
+              cpack -G DragNDrop || cpack -G ZIP
+              ;;
+            Windows)
+              # Пытаемся создать MSI, если не получится - создаем ZIP
               cpack -G WIX || cpack -G ZIP
-            else
-              cpack -G ZIP
-              echo "WiX not found, created ZIP package instead" >&2
-            fi
-          fi
+              ;;
+          esac
           mkdir -p ../artifacts/packages
           cp *.deb *.rpm *.dmg *.msi *.zip ../artifacts/packages/ 2>/dev/null || :
+
       # Копирование бинарных файлов
       - name: Copy binaries
         shell: bash
@@ -127,6 +114,7 @@ jobs:
               find build -name "solver.exe" -type f -exec cp {} artifacts/binaries/ \;
               ;;
           esac
+
       # Проверка результатов
       - name: Verify artifacts
         shell: bash
@@ -140,6 +128,7 @@ jobs:
             echo "No artifacts found!"
             exit 1
           fi
+
       # Загрузка артефактов
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
