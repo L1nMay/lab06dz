@@ -9,9 +9,6 @@ permissions:
   contents: write
   packages: write
 
-env:
-  WIX_ROOT: C:\Program Files (x86)\WiX Toolset v3.11\
-
 jobs:
   build:
     strategy:
@@ -32,7 +29,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake build-essential zip rpm
           cmake --version
-
       # Установка зависимостей для macOS
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
@@ -40,50 +36,67 @@ jobs:
           brew update
           brew install --formula cmake
           cmake --version
-
-      # Установка зависимостей для Windows
+      # Установка зависимостей для Windows с улучшенной обработкой ошибок
       - name: Install dependencies (Windows)
         if: runner.os == 'Windows'
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          choco install cmake --version=3.28.1 -y
-          choco install wixtoolset -y
-          refreshenv
-          cmake --version
-          light.exe -version
-          candle.exe -version
-
+          $ProgressPreference = 'SilentlyContinue'
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          try {
+            if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
+              Set-ExecutionPolicy Bypass -Scope Process -Force
+              [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+              iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+            }
+            choco install cmake --version=3.28.1 -y --no-progress --fail-on-error-output --timeout 900
+            choco install wixtoolset -y --no-progress
+            refreshenv
+            cmake --version
+          } catch {
+            Write-Error "Failed to install dependencies: $_"
+            exit 1
+          }
       # Подготовка Windows-specific файлов
       - name: Prepare Windows files
         if: runner.os == 'Windows'
         shell: bash
         run: |
+          if [ ! -f LICENSE.rtf ]; then
+            echo "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fnil\\fcharset0 Calibri;}}\\viewkind4\\uc1\\pard\\sa200\\sl276\\slmult1\\lang9\\f0\\fs22 Sample License Text\\par }" > LICENSE.rtf
+          fi
           mkdir -p assets
-          echo "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fnil\\fcharset0 Calibri;}}\\viewkind4\\uc1\\pard\\sa200\\sl276\\slmult1\\lang9\\f0\\fs22 Sample License Text\\par }" > LICENSE.rtf
-          echo "Placeholder icon" > assets/icon.ico
-          if [ ! -f installer.wxs ]; then
-            echo '<?xml version="1.0" encoding="UTF-8"?>
+          if [ ! -f assets/icon.ico ]; then
+            echo "Placeholder icon" > assets/icon.ico
+          fi
+          # Создание файла Product.wxs для WiX, если его нет
+          if [ ! -f Product.wxs ]; then
+            cat > Product.wxs << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <Product Id="*" Name="Solver" Language="1033" Version="$(var.Version)" Manufacturer="YourCompany" UpgradeCode="PUT-GUID-HERE">
-    <Package InstallerVersion="200" Compressed="yes" Comments="Windows Installer Package"/>
-    <Media Id="1" Cabinet="media1.cab" EmbedCab="yes"/>
+  <Product Id="*" Name="Solver" Language="1033" Version="${{ github.ref_name | replace('v', '') }}" Manufacturer="Your Company" UpgradeCode="$(uuidgen || echo '00000000-0000-0000-0000-000000000000')">
+    <Package InstallerVersion="200" Compressed="yes" InstallScope="perMachine" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Feature Id="ProductFeature" Title="Solver" Level="1">
+      <ComponentRef Id="ApplicationFiles" />
+    </Feature>
+
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFilesFolder">
-        <Directory Id="INSTALLDIR" Name="Solver">
+        <Directory Id="INSTALLFOLDER" Name="Solver">
           <Component Id="ApplicationFiles" Guid="*">
-            <File Id="ApplicationFile" Source="$(var.SourceDir)\solver.exe"/>
+            <File Id="Solver.exe" Source="build/Release/solver.exe" KeyPath="yes" />
           </Component>
         </Directory>
       </Directory>
     </Directory>
-    <Feature Id="DefaultFeature" Level="1">
-      <ComponentRef Id="ApplicationFiles"/>
-    </Feature>
   </Product>
-</Wix>' > installer.wxs
+</Wix>
+EOF
           fi
-
       # Сборка проекта
       - name: Configure and Build
         shell: bash
@@ -92,17 +105,15 @@ jobs:
           cd build
           if [ "$RUNNER_OS" = "Windows" ]; then
             cmake .. -DCMAKE_BUILD_TYPE=Release \
-              -DCPACK_GENERATOR="WIX" \
-              -DCPACK_WIX_UPGRADE_GUID="$(powershell -Command "[guid]::NewGuid().ToString().ToUpper()")" \
-              -DCPACK_WIX_PRODUCT_GUID="$(powershell -Command "[guid]::NewGuid().ToString().ToUpper()")" \
+              -DCPACK_WIX_UPGRADE_GUID="$(uuidgen || echo '00000000-0000-0000-0000-000000000000')" \
+              -DCPACK_WIX_PRODUCT_GUID="$(uuidgen || echo '11111111-1111-1111-1111-111111111111')" \
               -DCPACK_WIX_LICENSE_RTF="../LICENSE.rtf" \
               -DCPACK_WIX_PRODUCT_ICON="../assets/icon.ico" \
-              -DCPACK_WIX_UI_REF="WixUI_InstallDir"
+              -DCPACK_WIX_TEMPLATE="../Product.wxs"
           else
             cmake .. -DCMAKE_BUILD_TYPE=Release
           fi
           cmake --build . --config Release --parallel 2
-
       # Создание исходников (только для тегов)
       - name: Create source packages
         if: startsWith(github.ref, 'refs/tags/')
@@ -111,7 +122,6 @@ jobs:
           mkdir -p artifacts/source
           git archive --format=tar.gz -o artifacts/source/Solver-${{ github.ref_name }}-src.tar.gz HEAD
           git archive --format=zip -o artifacts/source/Solver-${{ github.ref_name }}-src.zip HEAD
-
       # Создание пакетов (только для тегов)
       - name: Create packages
         if: startsWith(github.ref, 'refs/tags/')
@@ -123,24 +133,18 @@ jobs:
           elif [ "$RUNNER_OS" = "macOS" ]; then
             cpack -G DragNDrop || cpack -G ZIP
           elif [ "$RUNNER_OS" = "Windows" ]; then
-            if cpack -G WIX -C Release; then
-              echo "MSI package created via CPack"
+            if command -v heat.exe >/dev/null 2>&1; then
+              # Сначала создаем MSI пакет через WiX
+              cpack -G WIX -C Release || echo "WiX package creation failed"
+              # Затем создаем ZIP как fallback
+              cpack -G ZIP -C Release
             else
-              echo "Building MSI manually..."
-              VERSION=${GITHUB_REF_NAME#v}
-              candle.exe -arch x64 -dVersion="$VERSION" \
-                -dSourceDir="Release" \
-                -dIconPath="../assets/icon.ico" \
-                -dLicensePath="../LICENSE.rtf" \
-                "../installer.wxs" -out "installer.wixobj"
-
-              light.exe -ext WixUIExtension -out "Solver-$VERSION.msi" "installer.wixobj"
+              cpack -G ZIP -C Release
+              echo "WiX not found, created ZIP package instead" >&2
             fi
-            cpack -G ZIP
           fi
           mkdir -p ../artifacts/packages
           cp *.deb *.rpm *.dmg *.msi *.zip ../artifacts/packages/ 2>/dev/null || :
-
       # Копирование бинарных файлов
       - name: Copy binaries
         shell: bash
@@ -154,23 +158,31 @@ jobs:
               find build -name "solver.exe" -type f -exec cp {} artifacts/binaries/ \;
               ;;
           esac
-
       # Проверка результатов
       - name: Verify artifacts
         shell: bash
         run: |
-          echo "=== Artifacts ==="
+          echo "Artifacts directory contents:"
           ls -lhR artifacts/
-          [ -z "$(ls -A artifacts/)" ] && echo "Warning: No artifacts created!" || true
-
+          if [ ! -z "$(ls -A artifacts/)" ]; then
+            echo "Artifacts found:"
+            ls -lh artifacts/*
+          else
+            echo "No artifacts found!"
+            exit 1
+          fi
+          # Особенная проверка для Windows MSI
+          if [ "$RUNNER_OS" = "Windows" ] && [ ! -f "artifacts/packages/*.msi" ]; then
+            echo "Warning: MSI package was not created!" >&2
+          fi
       # Загрузка артефактов
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: Solver-${{ runner.os }}
-          path: artifacts/
+          path: |
+            artifacts/*
           retention-days: 7
-          if-no-files-found: warn
 
       # Создание релиза (только для тегов)
       - name: Create Release
