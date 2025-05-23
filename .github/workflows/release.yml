@@ -73,7 +73,7 @@ jobs:
           echo "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fnil\\fcharset0 Calibri;}}\\viewkind4\\uc1\\pard\\sa200\\sl276\\slmult1\\lang9\\f0\\fs22 Sample License Text\\par }" > LICENSE.rtf
 
           # Создание иконки (заглушка)
-          convert -size 256x256 xc:white assets/icon.ico || echo "Placeholder" > assets/icon.ico
+          echo "Placeholder" > assets/icon.ico
 
       # Сборка проекта
       - name: Configure and Build
@@ -88,6 +88,24 @@ jobs:
             cmake .. -DCMAKE_BUILD_TYPE=Release
             cmake --build . --config Release --parallel 2
           fi
+
+      # Проверка бинарного файла (особенно для Windows)
+      - name: Verify binary exists
+        shell: bash
+        run: |
+          echo "Checking for binary file..."
+          case "$RUNNER_OS" in
+            Linux|macOS)
+              find build -name "solver" -exec ls -lh {} \;
+              ;;
+            Windows)
+              find build -name "solver.exe" -exec ls -lh {} \;
+              if [ ! -f "build/Release/solver.exe" ]; then
+                echo "::error::solver.exe not found in build/Release/"
+                exit 1
+              fi
+              ;;
+          esac
 
       # Создание исходников (только для тегов)
       - name: Create source packages
@@ -113,10 +131,15 @@ jobs:
               cpack -G DragNDrop || cpack -G ZIP
               ;;
             Windows)
-              # Генерация GUIDs
-              UPGRADE_GUID=$(uuidgen | tr '[:lower:]' '[:upper:]')
-              PRODUCT_GUID=$(uuidgen | tr '[:lower:]' '[:upper:]')
-              COMPONENT_GUID=$(uuidgen | tr '[:lower:]' '[:upper:]')
+              # Генерация GUIDs через PowerShell
+              UPGRADE_GUID="$(powershell -Command "[guid]::NewGuid().ToString().ToUpper()")"
+              PRODUCT_GUID="$(powershell -Command "[guid]::NewGuid().ToString().ToUpper()")"
+              COMPONENT_GUID="$(powershell -Command "[guid]::NewGuid().ToString().ToUpper()")"
+
+              echo "Generated GUIDs for Windows package:"
+              echo "Upgrade: $UPGRADE_GUID"
+              echo "Product: $PRODUCT_GUID"
+              echo "Component: $COMPONENT_GUID"
 
               # Конфигурация CPack для WiX
               cmake .. \
@@ -134,6 +157,7 @@ jobs:
               cmake --build . --config Release
 
               # Создание MSI пакета
+              echo "Creating MSI package..."
               cpack -G WIX -C Release || (echo "CPack failed, trying manual WiX build" && \
                 candle.exe -arch x64 -out "installer.wixobj" "../installer.wxs" && \
                 light.exe -ext WixUIExtension -out "Solver-${{ github.ref_name }}.msi" "installer.wixobj")
@@ -146,20 +170,6 @@ jobs:
           # Копирование созданных пакетов
           mkdir -p ../artifacts/packages
           cp *.deb *.rpm *.dmg *.msi *.zip ../artifacts/packages/ 2>/dev/null || :
-
-      # Копирование бинарных файлов
-      - name: Copy binaries
-        shell: bash
-        run: |
-          mkdir -p artifacts/binaries
-          case "$RUNNER_OS" in
-            Linux|macOS)
-              find build -name "solver" -type f -exec cp {} artifacts/binaries/solver-${{ github.ref_name }}-$RUNNER_OS \;
-              ;;
-            Windows)
-              find build -name "solver.exe" -type f -exec cp {} artifacts/binaries/solver-${{ github.ref_name }}-$RUNNER_OS.exe \;
-              ;;
-          esac
 
       # Проверка результатов
       - name: Verify artifacts
@@ -178,6 +188,8 @@ jobs:
                 echo "MSI package created successfully"
               else
                 echo "::warning::MSI package was not created"
+                echo "Trying to find any generated MSI files..."
+                find build -name "*.msi" -exec ls -lh {} \; || :
               fi
               ;;
           esac
