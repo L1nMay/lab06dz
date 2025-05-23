@@ -41,7 +41,7 @@ jobs:
           brew install --formula cmake
           cmake --version
 
-      # Установка зависимостей для Windows с улучшенной обработкой ошибок
+      # Установка зависимостей для Windows
       - name: Install dependencies (Windows)
         if: runner.os == 'Windows'
         shell: powershell
@@ -59,7 +59,6 @@ jobs:
             choco install wixtoolset -y --no-progress
             refreshenv
             cmake --version
-            # Проверка установки WiX
             light.exe -version
             candle.exe -version
           } catch {
@@ -73,13 +72,10 @@ jobs:
         shell: bash
         run: |
           mkdir -p assets
-          # Создаем файл лицензии в формате RTF
           echo "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fnil\\fcharset0 Calibri;}}\\viewkind4\\uc1\\pard\\sa200\\sl276\\slmult1\\lang9\\f0\\fs22 Sample License Text\\par }" > LICENSE.rtf
-          # Создаем иконку (заглушку)
           echo "Placeholder icon" > assets/icon.ico
-          # Создаем базовый WXS файл, если его нет
           if [ ! -f installer.wxs ]; then
-            cat > installer.wxs << 'EOF'
+            cat << 'EOF' > installer.wxs
 <?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <Product Id="*" Name="Solver" Language="1033" Version="$(var.Version)" Manufacturer="YourCompany" UpgradeCode="PUT-GUID-HERE">
@@ -118,8 +114,8 @@ EOF
           if [ "$RUNNER_OS" = "Windows" ]; then
             cmake .. -DCMAKE_BUILD_TYPE=Release \
               -DCPACK_GENERATOR="WIX" \
-              -DCPACK_WIX_UPGRADE_GUID="$(uuidgen || echo '00000000-0000-0000-0000-000000000000')" \
-              -DCPACK_WIX_PRODUCT_GUID="$(uuidgen || echo '11111111-1111-1111-1111-111111111111')" \
+              -DCPACK_WIX_UPGRADE_GUID="$(powershell -Command "[guid]::NewGuid().ToString().ToUpper()")" \
+              -DCPACK_WIX_PRODUCT_GUID="$(powershell -Command "[guid]::NewGuid().ToString().ToUpper()")" \
               -DCPACK_WIX_LICENSE_RTF="../LICENSE.rtf" \
               -DCPACK_WIX_PRODUCT_ICON="../assets/icon.ico" \
               -DCPACK_WIX_UI_REF="WixUI_InstallDir"
@@ -153,9 +149,7 @@ EOF
               echo "MSI package created successfully via CPack"
             else
               echo "CPack failed, trying manual WiX build"
-              # Получаем версию из тега (удаляем 'v' в начале)
               VERSION=${GITHUB_REF_NAME#v}
-              # Собираем MSI вручную
               candle.exe -arch x64 -dVersion="$VERSION" \
                 -dSourceDir="Release" \
                 -dIconPath="../assets/icon.ico" \
@@ -164,7 +158,6 @@ EOF
 
               light.exe -ext WixUIExtension -out "Solver-$VERSION.msi" "installer.wixobj"
             fi
-            # Всегда создаем ZIP как fallback
             cpack -G ZIP
           fi
           mkdir -p ../artifacts/packages
