@@ -11,89 +11,61 @@ permissions:
 
 env:
   WIX_ROOT: C:\Program Files (x86)\WiX Toolset v3.11\
-  ARTIFACTS_DIR: artifacts
 
 jobs:
   build:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        # Отключаем взаимозависимость между задачами
-        fail-fast: false
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # Создаем директорию для артефактов
-      - name: Create artifacts directory
-        shell: bash
-        run: |
-          mkdir -p $ARTIFACTS_DIR/{packages,binaries,source}
-
-      # Установка зависимостей для Linux
-      - name: Install Linux dependencies
+      # Установка зависимостей для Ubuntu
+      - name: Install dependencies (Ubuntu)
         if: runner.os == 'Linux'
-        shell: bash
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            cmake build-essential zip rpm \
-            libjsoncpp-dev librhash-dev
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential zip rpm
           cmake --version
 
       # Установка зависимостей для macOS
-      - name: Install macOS dependencies
+      - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
-        shell: bash
         run: |
-          brew update --quiet
-          brew install cmake --formula || brew upgrade cmake
+          brew update
+          brew install --formula cmake
           cmake --version
 
-      # Установка зависимостей для Windows
-      - name: Install Windows dependencies
+      # Установка зависимостей для Windows с улучшенной обработкой ошибок
+      - name: Install dependencies (Windows)
         if: runner.os == 'Windows'
         shell: powershell
-        timeout-minutes: 30
         run: |
-          # Установка CMake
-          $cmakeUrl = "https://github.com/Kitware/CMake/releases/download/v3.28.3/cmake-3.28.3-windows-x86_64.msi"
-          $cmakeInstaller = "$env:RUNNER_TEMP\cmake-installer.msi"
-
+          $ErrorActionPreference = 'Stop'
+          $ProgressPreference = 'SilentlyContinue'
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
           try {
-              # Альтернативный метод загрузки
-              Write-Host "Downloading CMake using BITS..."
-              Start-BitsTransfer -Source $cmakeUrl -Destination $cmakeInstaller
-
-              Write-Host "Installing CMake..."
-              $process = Start-Process -FilePath "msiexec.exe" -ArgumentList "/i $cmakeInstaller /quiet /qn /norestart ADD_CMAKE_TO_PATH=System" -PassThru -Wait
-              if ($process.ExitCode -ne 0) {
-                  Write-Error "CMake installation failed with exit code $($process.ExitCode)"
-                  exit 1
-              }
+            if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
+              Set-ExecutionPolicy Bypass -Scope Process -Force
+              [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+              iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+            }
+            choco install cmake --version=3.28.1 -y --no-progress --fail-on-error-output --timeout 900
+            choco install wixtoolset -y --no-progress
+            refreshenv
+            cmake --version
+            # Проверка установки WiX
+            light.exe -version
+            candle.exe -version
           } catch {
-              Write-Error "Failed to install CMake: $_"
-              exit 1
+            Write-Error "Failed to install dependencies: $_"
+            exit 1
           }
-
-          # Установка WiX
-          Write-Host "Installing WiX Toolset..."
-          try {
-              choco install wixtoolset -y --no-progress --ignore-detected-reboot
-              refreshenv
-          } catch {
-              Write-Error "Failed to install WiX Toolset: $_"
-              exit 1
-          }
-
-          # Проверка установки
-          cmake --version
-          light.exe -version
-          candle.exe -version
 
       # Подготовка Windows-specific файлов
       - name: Prepare Windows files
@@ -101,8 +73,41 @@ jobs:
         shell: bash
         run: |
           mkdir -p assets
+          # Создаем файл лицензии в формате RTF
           echo "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fnil\\fcharset0 Calibri;}}\\viewkind4\\uc1\\pard\\sa200\\sl276\\slmult1\\lang9\\f0\\fs22 Sample License Text\\par }" > LICENSE.rtf
-          echo "Placeholder" > assets/icon.ico
+          # Создаем иконку (заглушку)
+          echo "Placeholder icon" > assets/icon.ico
+          # Создаем базовый WXS файл, если его нет
+          if [ ! -f installer.wxs ]; then
+            cat > installer.wxs << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*" Name="Solver" Language="1033" Version="$(var.Version)" Manufacturer="YourCompany" UpgradeCode="PUT-GUID-HERE">
+    <Package InstallerVersion="200" Compressed="yes" Comments="Windows Installer Package"/>
+    <Media Id="1" Cabinet="media1.cab" EmbedCab="yes"/>
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFilesFolder">
+        <Directory Id="INSTALLDIR" Name="Solver">
+          <Component Id="ApplicationFiles" Guid="*">
+            <File Id="ApplicationFile" Source="$(var.SourceDir)\solver.exe"/>
+          </Component>
+        </Directory>
+      </Directory>
+    </Directory>
+    <Feature Id="DefaultFeature" Level="1">
+      <ComponentRef Id="ApplicationFiles"/>
+    </Feature>
+    <Property Id="ARPCOMMENTS">Solver Application</Property>
+    <Property Id="ARPCONTACT">Your Contact</Property>
+    <Property Id="ARPURLINFOABOUT">https://yourwebsite.com</Property>
+    <Icon Id="icon.ico" SourceFile="$(var.IconPath)"/>
+    <Property Id="ARPPRODUCTICON">icon.ico</Property>
+    <UIRef Id="WixUI_InstallDir"/>
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.LicensePath)"/>
+  </Product>
+</Wix>
+EOF
+          fi
 
       # Сборка проекта
       - name: Configure and Build
@@ -111,39 +116,26 @@ jobs:
           mkdir -p build
           cd build
           if [ "$RUNNER_OS" = "Windows" ]; then
-            cmake .. -G "Visual Studio 17 2022" -A x64
-            cmake --build . --config Release -- /maxcpucount:2
+            cmake .. -DCMAKE_BUILD_TYPE=Release \
+              -DCPACK_GENERATOR="WIX" \
+              -DCPACK_WIX_UPGRADE_GUID="$(uuidgen || echo '00000000-0000-0000-0000-000000000000')" \
+              -DCPACK_WIX_PRODUCT_GUID="$(uuidgen || echo '11111111-1111-1111-1111-111111111111')" \
+              -DCPACK_WIX_LICENSE_RTF="../LICENSE.rtf" \
+              -DCPACK_WIX_PRODUCT_ICON="../assets/icon.ico" \
+              -DCPACK_WIX_UI_REF="WixUI_InstallDir"
           else
             cmake .. -DCMAKE_BUILD_TYPE=Release
-            cmake --build . --config Release --parallel 2
           fi
-
-      # Копирование бинарных файлов
-      - name: Copy binaries
-        shell: bash
-        run: |
-          case "$RUNNER_OS" in
-            Linux|macOS)
-              find build -name "solver" -type f -exec cp {} $ARTIFACTS_DIR/binaries/ \;
-              ;;
-            Windows)
-              find build -name "solver.exe" -type f -exec cp {} $ARTIFACTS_DIR/binaries/ \;
-              ;;
-          esac
-
-          # Проверка что файлы скопировались
-          ls -la $ARTIFACTS_DIR/binaries/ || :
-          if [ -z "$(ls -A $ARTIFACTS_DIR/binaries/)" ]; then
-            echo "::warning::No binaries were copied!"
-          fi
+          cmake --build . --config Release --parallel 2
 
       # Создание исходников (только для тегов)
       - name: Create source packages
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
-          git archive --format=tar.gz -o "$ARTIFACTS_DIR/source/Solver-${{ github.ref_name }}-src.tar.gz" HEAD
-          git archive --format=zip -o "$ARTIFACTS_DIR/source/Solver-${{ github.ref_name }}-src.zip" HEAD
+          mkdir -p artifacts/source
+          git archive --format=tar.gz -o artifacts/source/Solver-${{ github.ref_name }}-src.tar.gz HEAD
+          git archive --format=zip -o artifacts/source/Solver-${{ github.ref_name }}-src.zip HEAD
 
       # Создание пакетов (только для тегов)
       - name: Create packages
@@ -151,90 +143,69 @@ jobs:
         shell: bash
         run: |
           cd build
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            cpack -G DEB && cpack -G RPM
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            cpack -G DragNDrop || cpack -G ZIP
+          elif [ "$RUNNER_OS" = "Windows" ]; then
+            # Сначала пробуем создать MSI через CPack
+            if cpack -G WIX -C Release; then
+              echo "MSI package created successfully via CPack"
+            else
+              echo "CPack failed, trying manual WiX build"
+              # Получаем версию из тега (удаляем 'v' в начале)
+              VERSION=${GITHUB_REF_NAME#v}
+              # Собираем MSI вручную
+              candle.exe -arch x64 -dVersion="$VERSION" \
+                -dSourceDir="Release" \
+                -dIconPath="../assets/icon.ico" \
+                -dLicensePath="../LICENSE.rtf" \
+                "../installer.wxs" -out "installer.wixobj"
 
+              light.exe -ext WixUIExtension -out "Solver-$VERSION.msi" "installer.wixobj"
+            fi
+            # Всегда создаем ZIP как fallback
+            cpack -G ZIP
+          fi
+          mkdir -p ../artifacts/packages
+          cp *.deb *.rpm *.dmg *.msi *.zip ../artifacts/packages/ 2>/dev/null || :
+
+      # Копирование бинарных файлов
+      - name: Copy binaries
+        shell: bash
+        run: |
+          mkdir -p artifacts/binaries
           case "$RUNNER_OS" in
-            Linux)
-              cpack -G DEB && cp *.deb ../$ARTIFACTS_DIR/packages/ || echo "DEB package creation failed"
-              cpack -G RPM && cp *.rpm ../$ARTIFACTS_DIR/packages/ || echo "RPM package creation failed"
-              ;;
-            macOS)
-              # Сначала пробуем создать DragNDrop, если не получится - создаем ZIP
-              if cpack -G DragNDrop; then
-                cp *.dmg ../$ARTIFACTS_DIR/packages/
-              else
-                echo "DragNDrop failed, trying ZIP..."
-                cpack -G ZIP && cp *.zip ../$ARTIFACTS_DIR/packages/ || echo "ZIP package creation failed"
-              fi
+            Linux|macOS)
+              find build -name "solver" -type f -exec cp {} artifacts/binaries/ \;
               ;;
             Windows)
-              # Генерация GUIDs
-              UPGRADE_GUID=$(powershell -Command "[guid]::NewGuid().ToString().ToUpper()")
-              PRODUCT_GUID=$(powershell -Command "[guid]::NewGuid().ToString().ToUpper()")
-
-              # Конфигурация CPack для WiX
-              cmake .. \
-                -DCPACK_GENERATOR="WIX" \
-                -DCPACK_PACKAGE_NAME="Solver" \
-                -DCPACK_PACKAGE_VENDOR="YourCompany" \
-                -DCPACK_PACKAGE_VERSION="${{ github.ref_name }}" \
-                -DCPACK_WIX_UPGRADE_GUID="$UPGRADE_GUID" \
-                -DCPACK_WIX_PRODUCT_GUID="$PRODUCT_GUID" \
-                -DCPACK_WIX_PRODUCT_ICON="../assets/icon.ico" \
-                -DCPACK_WIX_LICENSE_RTF="../LICENSE.rtf" \
-                -DCPACK_WIX_UI_REF="WixUI_InstallDir"
-
-              # Пересборка
-              cmake --build . --config Release
-
-              # Создание MSI
-              if cpack -G WIX -C Release; then
-                cp *.msi ../$ARTIFACTS_DIR/packages/
-              else
-                echo "CPack failed, trying manual WiX build"
-                candle.exe -arch x64 -out "installer.wixobj" "../installer.wxs" && \
-                light.exe -ext WixUIExtension -out "Solver-${{ github.ref_name }}.msi" "installer.wixobj" && \
-                cp *.msi ../$ARTIFACTS_DIR/packages/ || echo "Manual MSI creation failed"
-              fi
-
-              # Создание ZIP
-              cpack -G ZIP && cp *.zip ../$ARTIFACTS_DIR/packages/ || echo "ZIP creation failed"
+              find build -name "solver.exe" -type f -exec cp {} artifacts/binaries/ \;
               ;;
           esac
 
-          # Проверка что пакеты созданы
-          ls -la ../$ARTIFACTS_DIR/packages/ || :
-          if [ -z "$(ls -A ../$ARTIFACTS_DIR/packages/)" ]; then
-            echo "::warning::No packages were created!"
-          fi
-
-      # Проверка артефактов
+      # Проверка результатов
       - name: Verify artifacts
         shell: bash
         run: |
-          echo "=== Artifacts structure ==="
-          find $ARTIFACTS_DIR/ -type f -exec ls -lh {} \; || echo "No artifacts found"
-
-          echo "=== Package contents ==="
-          case "$RUNNER_OS" in
-            Linux)   ls -lh $ARTIFACTS_DIR/packages/*.deb $ARTIFACTS_DIR/packages/*.rpm 2>/dev/null || : ;;
-            macOS)   ls -lh $ARTIFACTS_DIR/packages/*.dmg $ARTIFACTS_DIR/packages/*.zip 2>/dev/null || : ;;
-            Windows)
-              ls -lh $ARTIFACTS_DIR/packages/*.msi $ARTIFACTS_DIR/packages/*.zip 2>/dev/null || :
-              if [ ! -f "$(ls $ARTIFACTS_DIR/packages/*.msi 2>/dev/null | head -1)" ]; then
-                echo "::warning::MSI package was not created"
-                find build -name "*.msi" -exec ls -lh {} \; || :
-              fi
-              ;;
-          esac
+          echo "Artifacts directory contents:"
+          ls -lhR artifacts/
+          if [ ! -z "$(ls -A artifacts/)" ]; then
+            echo "Artifacts found:"
+            ls -lh artifacts/*
+          else
+            echo "No artifacts found!"
+            exit 1
+          fi
 
       # Загрузка артефактов
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: Solver-${{ runner.os }}
-          path: $ARTIFACTS_DIR/
+          path: |
+            artifacts/*
           retention-days: 7
-          if-no-files-found: warn
 
       # Создание релиза (только для тегов)
       - name: Create Release
@@ -246,14 +217,9 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: Solver ${{ github.ref_name }}
           files: |
-            $ARTIFACTS_DIR/source/*
-            $ARTIFACTS_DIR/packages/*
-            $ARTIFACTS_DIR/binaries/*
+            artifacts/source/*
+            artifacts/packages/*
+            artifacts/binaries/*
           draft: false
           prerelease: false
           fail_on_unmatched_files: false
-          body: |
-            Automated release for version ${{ github.ref_name }}
-            ### Assets:
-            - Binary packages
-            - Source code archives
