@@ -16,6 +16,7 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
+    continue-on-error: false
 
     steps:
       - uses: actions/checkout@v4
@@ -30,13 +31,15 @@ jobs:
           sudo apt-get install -y cmake build-essential zip rpm python3
           cmake --version
 
-      # Установка зависимостей для macOS
+      # Установка зависимостей для macOS (исправленная)
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
           brew update
-          brew install cmake
+          brew install --formula cmake
+          brew install python
           cmake --version
+          python3 --version
 
       # Установка зависимостей для Windows
       - name: Install Windows dependencies
@@ -51,13 +54,15 @@ jobs:
           Expand-Archive -Path "$env:RUNNER_TEMP\wix.zip" -DestinationPath $wixPath -Force
           echo "$wixPath" | Out-File -FilePath $env:GITHUB_PATH -Append
 
-          # Установка CMake
+          # Установка CMake и Python
           choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
-          refreshenv
-
-          # Установка Python для генерации GUID
           choco install python -y
           refreshenv
+
+          # Проверка установки
+          cmake --version
+          python --version
+          Get-Command candle.exe, light.exe, heat.exe
 
       # Подготовка Windows-файлов
       - name: Prepare Windows files
@@ -65,39 +70,8 @@ jobs:
         shell: bash
         run: |
           mkdir -p wix/assets
-
-          # Лицензия в RTF формате
           echo "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fnil\\fcharset0 Calibri;}}\\viewkind4\\uc1\\pard\\sa200\\sl276\\slmult1\\lang9\\f0\\fs22 Sample License Text\\par }" > wix/LICENSE.rtf
-
-          # Иконка приложения
           curl -L -o wix/assets/icon.ico https://raw.githubusercontent.com/microsoft/fluentui-system-icons/master/assets/App%20Icon/ic_fluent_app_icon_24_filled.ico
-
-          # WXS-файл для сборки MSI
-          cat << 'EOF' > wix/installer.wxs
-          <?xml version="1.0"?>
-          <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-            <Product Id="$(var.ProductCode)" Name="Solver" Language="1033" Version="$(var.Version)"
-                   Manufacturer="Your Company" UpgradeCode="$(var.UpgradeCode)">
-              <Package InstallerVersion="200" Compressed="yes" Comments="Windows Installer Package"/>
-              <Media Id="1" Cabinet="media1.cab" EmbedCab="yes"/>
-              <Directory Id="TARGETDIR" Name="SourceDir">
-                <Directory Id="ProgramFilesFolder">
-                  <Directory Id="INSTALLDIR" Name="Solver">
-                    <Component Id="ApplicationFiles" Guid="*">
-                      <File Id="ApplicationFile" Source="$(var.SourcePath)" KeyPath="yes"/>
-                    </Component>
-                  </Directory>
-                </Directory>
-              </Directory>
-              <Feature Id="DefaultFeature" Level="1">
-                <ComponentRef Id="ApplicationFiles"/>
-              </Feature>
-              <Icon Id="icon.ico" SourceFile="$(var.IconPath)"/>
-              <Property Id="ARPPRODUCTICON" Value="icon.ico"/>
-              <WixVariable Id="WixUILicenseRtf" Value="$(var.LicensePath)"/>
-            </Product>
-          </Wix>
-          EOF
 
       # Сборка проекта
       - name: Configure and Build
@@ -105,11 +79,7 @@ jobs:
         run: |
           mkdir -p build
           cd build
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            cmake .. -DCMAKE_BUILD_TYPE=Release
-          else
-            cmake .. -DCMAKE_BUILD_TYPE=Release
-          fi
+          cmake .. -DCMAKE_BUILD_TYPE=Release
           cmake --build . --config Release --parallel 2
 
       # Создание исходников (только для тегов)
