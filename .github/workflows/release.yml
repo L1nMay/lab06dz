@@ -75,8 +75,7 @@ jobs:
           echo "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fnil\\fcharset0 Calibri;}}\\viewkind4\\uc1\\pard\\sa200\\sl276\\slmult1\\lang9\\f0\\fs22 Sample License Text\\par }" > LICENSE.rtf
           echo "Placeholder icon" > assets/icon.ico
           if [ ! -f installer.wxs ]; then
-            cat << 'EOF' > installer.wxs
-<?xml version="1.0" encoding="UTF-8"?>
+            echo '<?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <Product Id="*" Name="Solver" Language="1033" Version="$(var.Version)" Manufacturer="YourCompany" UpgradeCode="PUT-GUID-HERE">
     <Package InstallerVersion="200" Compressed="yes" Comments="Windows Installer Package"/>
@@ -101,8 +100,7 @@ jobs:
     <UIRef Id="WixUI_InstallDir"/>
     <WixVariable Id="WixUILicenseRtf" Value="$(var.LicensePath)"/>
   </Product>
-</Wix>
-EOF
+</Wix>' > installer.wxs
           fi
 
       # Сборка проекта
