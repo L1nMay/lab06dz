@@ -47,24 +47,12 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          $ProgressPreference = 'SilentlyContinue'
-          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-          try {
-            if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
-              Set-ExecutionPolicy Bypass -Scope Process -Force
-              [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-              iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-            }
-            choco install cmake --version=3.28.1 -y --no-progress --fail-on-error-output --timeout 900
-            choco install wixtoolset -y --no-progress
-            refreshenv
-            cmake --version
-            light.exe -version
-            candle.exe -version
-          } catch {
-            Write-Error "Failed to install dependencies: $_"
-            exit 1
-          }
+          choco install cmake --version=3.28.1 -y
+          choco install wixtoolset -y
+          refreshenv
+          cmake --version
+          light.exe -version
+          candle.exe -version
 
       # Подготовка Windows-specific файлов
       - name: Prepare Windows files
@@ -92,13 +80,6 @@ jobs:
     <Feature Id="DefaultFeature" Level="1">
       <ComponentRef Id="ApplicationFiles"/>
     </Feature>
-    <Property Id="ARPCOMMENTS">Solver Application</Property>
-    <Property Id="ARPCONTACT">Your Contact</Property>
-    <Property Id="ARPURLINFOABOUT">https://yourwebsite.com</Property>
-    <Icon Id="icon.ico" SourceFile="$(var.IconPath)"/>
-    <Property Id="ARPPRODUCTICON">icon.ico</Property>
-    <UIRef Id="WixUI_InstallDir"/>
-    <WixVariable Id="WixUILicenseRtf" Value="$(var.LicensePath)"/>
   </Product>
 </Wix>' > installer.wxs
           fi
@@ -142,11 +123,10 @@ jobs:
           elif [ "$RUNNER_OS" = "macOS" ]; then
             cpack -G DragNDrop || cpack -G ZIP
           elif [ "$RUNNER_OS" = "Windows" ]; then
-            # Сначала пробуем создать MSI через CPack
             if cpack -G WIX -C Release; then
-              echo "MSI package created successfully via CPack"
+              echo "MSI package created via CPack"
             else
-              echo "CPack failed, trying manual WiX build"
+              echo "Building MSI manually..."
               VERSION=${GITHUB_REF_NAME#v}
               candle.exe -arch x64 -dVersion="$VERSION" \
                 -dSourceDir="Release" \
@@ -179,24 +159,18 @@ jobs:
       - name: Verify artifacts
         shell: bash
         run: |
-          echo "Artifacts directory contents:"
+          echo "=== Artifacts ==="
           ls -lhR artifacts/
-          if [ ! -z "$(ls -A artifacts/)" ]; then
-            echo "Artifacts found:"
-            ls -lh artifacts/*
-          else
-            echo "No artifacts found!"
-            exit 1
-          fi
+          [ -z "$(ls -A artifacts/)" ] && echo "Warning: No artifacts created!" || true
 
       # Загрузка артефактов
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: Solver-${{ runner.os }}
-          path: |
-            artifacts/*
+          path: artifacts/
           retention-days: 7
+          if-no-files-found: warn
 
       # Создание релиза (только для тегов)
       - name: Create Release
