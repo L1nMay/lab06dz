@@ -29,14 +29,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake build-essential zip rpm
           cmake --version
+
       # Установка зависимостей для macOS
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
           brew update
-          brew install --formula cmake
+          brew install --formula cmake create-dmg
           cmake --version
-      # Установка зависимостей для Windows с улучшенной обработкой ошибок
+
+      # Установка зависимостей для Windows
       - name: Install dependencies (Windows)
         if: runner.os == 'Windows'
         shell: powershell
@@ -58,6 +60,7 @@ jobs:
             Write-Error "Failed to install dependencies: $_"
             exit 1
           }
+
       # Подготовка Windows-specific файлов
       - name: Prepare Windows files
         if: runner.os == 'Windows'
@@ -70,6 +73,7 @@ jobs:
           if [ ! -f assets/icon.ico ]; then
             echo "Placeholder icon" > assets/icon.ico
           fi
+
       # Сборка проекта
       - name: Configure and Build
         shell: bash
@@ -86,6 +90,7 @@ jobs:
             cmake .. -DCMAKE_BUILD_TYPE=Release
           fi
           cmake --build . --config Release --parallel 2
+
       # Создание исходников (только для тегов)
       - name: Create source packages
         if: startsWith(github.ref, 'refs/tags/')
@@ -94,26 +99,40 @@ jobs:
           mkdir -p artifacts/source
           git archive --format=tar.gz -o artifacts/source/Solver-${{ github.ref_name }}-src.tar.gz HEAD
           git archive --format=zip -o artifacts/source/Solver-${{ github.ref_name }}-src.zip HEAD
+
       # Создание пакетов (только для тегов)
       - name: Create packages
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
           cd build
+          mkdir -p ../artifacts/packages
+
           if [ "$RUNNER_OS" = "Linux" ]; then
-            cpack -G DEB && cpack -G RPM
+            # Create both DEB and RPM packages
+            cpack -G DEB && cp *.deb ../artifacts/packages/
+            cpack -G RPM && cp *.rpm ../artifacts/packages/
+
           elif [ "$RUNNER_OS" = "macOS" ]; then
-            cpack -G DragNDrop || cpack -G ZIP
+            # Create DMG package (fallback to ZIP if DMG fails)
+            if command -v create-dmg >/dev/null 2>&1; then
+              cpack -G DragNDrop || cpack -G ZIP
+            else
+              cpack -G ZIP
+            fi
+            cp *.dmg *.zip ../artifacts/packages/ 2>/dev/null || :
+
           elif [ "$RUNNER_OS" = "Windows" ]; then
+            # Create MSI package (fallback to ZIP if MSI fails)
             if command -v heat.exe >/dev/null 2>&1; then
               cpack -G WIX || cpack -G ZIP
             else
               cpack -G ZIP
               echo "WiX not found, created ZIP package instead" >&2
             fi
+            cp *.msi *.zip ../artifacts/packages/ 2>/dev/null || :
           fi
-          mkdir -p ../artifacts/packages
-          cp *.deb *.rpm *.dmg *.msi *.zip ../artifacts/packages/ 2>/dev/null || :
+
       # Копирование бинарных файлов
       - name: Copy binaries
         shell: bash
@@ -127,6 +146,7 @@ jobs:
               find build -name "solver.exe" -type f -exec cp {} artifacts/binaries/ \;
               ;;
           esac
+
       # Проверка результатов
       - name: Verify artifacts
         shell: bash
@@ -140,6 +160,7 @@ jobs:
             echo "No artifacts found!"
             exit 1
           fi
+
       # Загрузка артефактов
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
