@@ -22,53 +22,53 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Установка зависимостей
-      - name: Install dependencies
+      # Установка зависимостей для Linux
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
         shell: bash
         run: |
-          case "$RUNNER_OS" in
-            Linux)
-              sudo apt-get update -qq
-              sudo apt-get install -y --no-install-recommends \
-                cmake build-essential zip rpm \
-                libjsoncpp-dev librhash-dev uuid-runtime
-              ;;
-            macOS)
-              brew update --quiet
-              brew install cmake || brew upgrade cmake
-              ;;
-            Windows)
-              # Пропускаем установку зависимостей через bash на Windows
-              ;;
-          esac
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            cmake build-essential zip rpm \
+            libjsoncpp-dev librhash-dev uuid-runtime
           cmake --version
 
-      # Специальная установка для Windows
-      - name: Install Windows tools
+      # Установка зависимостей для macOS
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          brew update --quiet
+          brew install cmake || brew upgrade cmake
+          cmake --version
+
+      # Установка зависимостей для Windows
+      - name: Install Windows dependencies
         if: runner.os == 'Windows'
         shell: powershell
         run: |
           # Установка WiX Toolset
           choco install wixtoolset -y --no-progress --ignore-detected-reboot
+          # Установка CMake
+          choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
           refreshenv
 
-          # Проверка установки WiX
+          # Проверка установленных инструментов
+          Write-Host "CMake version:"
+          cmake --version
           Write-Host "WiX version:"
           light.exe -version
           candle.exe -version
-
-          # Установка CMake если нужно
-          if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
-            choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
-            refreshenv
-          }
 
       # Подготовка файлов для Windows
       - name: Prepare Windows files
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          # Создаем необходимые файлы
+          # Создаем необходимые директории
+          New-Item -ItemType Directory -Path "assets" -Force | Out-Null
+
+          # Создаем LICENSE.rtf если его нет
           if (-not (Test-Path "LICENSE.rtf")) {
             @"
 {\rtf1\ansi\ansicpg1252\deff0\deflang1033{\fonttbl{\f0\fnil\fcharset0 Calibri;}}
@@ -76,24 +76,29 @@ jobs:
 "@ | Out-File -Encoding ASCII "LICENSE.rtf"
           }
 
+          # Создаем иконку если ее нет
           if (-not (Test-Path "assets\icon.ico")) {
-            New-Item -ItemType Directory -Path "assets" -Force | Out-Null
-            [byte[]]$bytes = 0x00,0x00,0x01,0x00,0x01,0x00,0x10,0x10
-            [System.IO.File]::WriteAllBytes("assets\icon.ico", $bytes)
+            [byte[]]$iconBytes = 0x00,0x00,0x01,0x00,0x01,0x00,0x10,0x10,0x00,0x00,0x01,0x00,0x20,0x00,0x68,0x04,
+                                0x00,0x00,0x16,0x00,0x00,0x00,0x28,0x00,0x00,0x00,0x10,0x00,0x00,0x00,0x20,0x00,
+                                0x00,0x00,0x01,0x00,0x20,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+                                0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+            [System.IO.File]::WriteAllBytes("assets\icon.ico", $iconBytes)
           }
 
-          # Создаем минимальный WXS файл
+          # Создаем WXS файл если его нет
           if (-not (Test-Path "installer.wxs")) {
+            $guid1 = [guid]::NewGuid().ToString().ToUpper()
+            $guid2 = [guid]::NewGuid().ToString().ToUpper()
             @"
 <?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <Product Id="*" Name="Solver" Language="1033" Version="$env:GITHUB_REF_NAME" Manufacturer="YourCompany" UpgradeCode="PUT-GUID-HERE">
+  <Product Id="*" Name="Solver" Language="1033" Version="$env:GITHUB_REF_NAME" Manufacturer="YourCompany" UpgradeCode="$guid1">
     <Package InstallerVersion="200" Compressed="yes" Comments="Windows Installer Package"/>
     <Media Id="1" Cabinet="media1.cab" EmbedCab="yes"/>
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFilesFolder">
         <Directory Id="INSTALLDIR" Name="Solver">
-          <Component Id="ApplicationFiles" Guid="PUT-GUID-HERE">
+          <Component Id="ApplicationFiles" Guid="$guid2">
             <File Id="ApplicationFile" Source="build\Release\solver.exe"/>
           </Component>
         </Directory>
@@ -114,7 +119,7 @@ jobs:
           mkdir -p build
           cd build
           if [ "$RUNNER_OS" = "Windows" ]; then
-            cmake .. -G "Visual Studio 17 2022" -A x64
+            cmake .. -G "Visual Studio 17 2022" -A x64 -DCPACK_GENERATOR="WIX;ZIP"
           else
             cmake .. -DCMAKE_BUILD_TYPE=Release
           fi
@@ -144,15 +149,13 @@ jobs:
               cpack -G DragNDrop || cpack -G ZIP || echo "Package creation failed"
               ;;
             Windows)
-              # Сначала пробуем создать MSI через CPack
-              if ! cpack -G WIX -C Release; then
-                echo "CPack WIX failed, trying manual build..."
-                # Вручную компилируем WXS
-                candle.exe ../installer.wxs -out installer.wixobj || echo "WXS compilation failed"
-                # Линкуем с UI расширением
-                light.exe -ext WixUIExtension installer.wixobj -out Solver-${{ github.ref_name }}.msi || echo "MSI linking failed"
-              fi
-              # Всегда создаем ZIP
+              # Создаем MSI через WiX
+              echo "Creating MSI package..."
+              candle.exe ../installer.wxs -out installer.wixobj || echo "WXS compilation failed"
+              light.exe -ext WixUIExtension installer.wixobj -out Solver-${{ github.ref_name }}.msi || echo "MSI linking failed"
+
+              # Создаем ZIP архив
+              echo "Creating ZIP package..."
               cpack -G ZIP -C Release || echo "ZIP creation failed"
               ;;
           esac
@@ -172,8 +175,12 @@ jobs:
 
           echo "=== Package contents ==="
           case "$RUNNER_OS" in
-            Linux)   ls -lh artifacts/packages/*.deb artifacts/packages/*.rpm 2>/dev/null || : ;;
-            macOS)   ls -lh artifacts/packages/*.dmg artifacts/packages/*.zip 2>/dev/null || : ;;
+            Linux)
+              ls -lh artifacts/packages/*.deb artifacts/packages/*.rpm 2>/dev/null || :
+              ;;
+            macOS)
+              ls -lh artifacts/packages/*.dmg artifacts/packages/*.zip 2>/dev/null || :
+              ;;
             Windows)
               ls -lh artifacts/packages/*.msi artifacts/packages/*.zip 2>/dev/null || :
               if [ -f artifacts/packages/*.msi ]; then
