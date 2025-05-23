@@ -70,29 +70,26 @@ jobs:
           fi
           # Создание простого WXS файла, если его нет
           if [ ! -f installer.wxs ]; then
-            cat << 'EOF' > installer.wxs
-            <?xml version="1.0" encoding="UTF-8"?>
-            <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-              <Product Id="*" Name="Solver" Language="1033" Version="${{ github.ref_name }}" Manufacturer="YourCompany" UpgradeCode="PUT-GUID-HERE">
-                <Package InstallerVersion="200" Compressed="yes" Comments="Windows Installer Package"/>
-                <Media Id="1" Cabinet="media1.cab" EmbedCab="yes"/>
-                <Directory Id="TARGETDIR" Name="SourceDir">
-                  <Directory Id="ProgramFilesFolder">
-                    <Directory Id="INSTALLDIR" Name="Solver">
-                      <Component Id="ApplicationFiles" Guid="PUT-GUID-HERE">
-                        <File Id="ApplicationFile" Source="build/Release/solver.exe"/>
-                      </Component>
-                    </Directory>
-                  </Directory>
-                </Directory>
-                <Feature Id="DefaultFeature" Level="1">
-                  <ComponentRef Id="ApplicationFiles"/>
-                </Feature>
-              </Product>
-            </Wix>
-            EOF
+            echo '<?xml version="1.0" encoding="UTF-8"?>' > installer.wxs
+            echo '<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">' >> installer.wxs
+            echo '  <Product Id="*" Name="Solver" Language="1033" Version="${{ github.ref_name }}" Manufacturer="YourCompany" UpgradeCode="PUT-GUID-HERE">' >> installer.wxs
+            echo '    <Package InstallerVersion="200" Compressed="yes" Comments="Windows Installer Package"/>' >> installer.wxs
+            echo '    <Media Id="1" Cabinet="media1.cab" EmbedCab="yes"/>' >> installer.wxs
+            echo '    <Directory Id="TARGETDIR" Name="SourceDir">' >> installer.wxs
+            echo '      <Directory Id="ProgramFilesFolder">' >> installer.wxs
+            echo '        <Directory Id="INSTALLDIR" Name="Solver">' >> installer.wxs
+            echo '          <Component Id="ApplicationFiles" Guid="PUT-GUID-HERE">' >> installer.wxs
+            echo '            <File Id="ApplicationFile" Source="build/Release/solver.exe"/>' >> installer.wxs
+            echo '          </Component>' >> installer.wxs
+            echo '        </Directory>' >> installer.wxs
+            echo '      </Directory>' >> installer.wxs
+            echo '    </Directory>' >> installer.wxs
+            echo '    <Feature Id="DefaultFeature" Level="1">' >> installer.wxs
+            echo '      <ComponentRef Id="ApplicationFiles"/>' >> installer.wxs
+            echo '    </Feature>' >> installer.wxs
+            echo '  </Product>' >> installer.wxs
+            echo '</Wix>' >> installer.wxs
           fi
-
       # Сборка проекта
       - name: Configure and Build
         shell: bash
