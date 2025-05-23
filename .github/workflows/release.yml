@@ -37,26 +37,37 @@ jobs:
           brew install --formula cmake
           cmake --version
       # Установка зависимостей для Windows с улучшенной обработкой ошибок
-      - name: Install dependencies (Windows)
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $ProgressPreference = 'SilentlyContinue'
-          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-          try {
-            if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
-              Set-ExecutionPolicy Bypass -Scope Process -Force
-              [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-              iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-            }
-            choco install cmake --version=3.28.1 -y --no-progress --fail-on-error-output --timeout 900
-            choco install wixtoolset -y --no-progress
-            choco install wix --version=3.11.2 -y --no-progress
-            refreshenv
-            cmake --version
-            Write-Host "WiX version:"
-            heat.exe -? | Select-Object -First 1
+- name: Install dependencies (Windows)
+  if: runner.os == 'Windows'
+  shell: powershell
+  run: |
+    $ErrorActionPreference = 'Stop'
+    $ProgressPreference = 'SilentlyContinue'
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+    # Установка Chocolatey, если не установлен
+    if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
+      Set-ExecutionPolicy Bypass -Scope Process -Force
+      [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+      iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+      $env:Path = [System.Environment]::GetEnvironmentVariable('Path','Machine') + ";" + [System.Environment]::GetEnvironmentVariable('Path','User')
+    }
+
+    # Установка CMake (без фиксированной версии)
+    choco install cmake -y --no-progress
+    # Установка WiX Toolset (последней версии)
+    choco install wixtoolset -y --no-progress
+    # Дополнительные инструменты WiX
+    choco install wixtoolset.extension -y --no-progress
+
+    # Обновление PATH
+    Import-Module "$env:ChocolateyInstall\helpers\chocolateyProfile.psm1"
+    refreshenv
+
+    # Проверка установленных версий
+    cmake --version
+    Write-Host "WiX version:"
+    heat.exe -? | Select-Object -First 1
           } catch {
             Write-Error "Failed to install dependencies: $_"
             exit 1
