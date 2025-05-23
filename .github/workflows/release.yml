@@ -35,48 +35,58 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           brew update
-          brew install --formula cmake
+          brew install cmake
           cmake --version
 
       # Установка зависимостей для Windows
-      - name: Install dependencies (Windows)
+      - name: Install Windows dependencies
         if: runner.os == 'Windows'
         shell: powershell
         run: |
+          # Настройка окружения
           $ErrorActionPreference = 'Stop'
           $ProgressPreference = 'SilentlyContinue'
           [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-          # Установка Chocolatey если не установлен
+          # Установка Chocolatey
           if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
               Set-ExecutionPolicy Bypass -Scope Process -Force
               [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
               iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-              $env:Path = [System.Environment]::GetEnvironmentVariable('Path','Machine') + ";" + [System.Environment]::GetEnvironmentVariable('Path','User')
           }
 
-          # Установка необходимых пакетов
-          choco install cmake -y --no-progress
-          choco install wixtoolset -y --no-progress
-          choco install wixtoolset.extension -y --no-progress
+          # Установка CMake с добавлением в PATH
+          choco install cmake.install --version=3.28.1 -y --no-progress --params='ADD_CMAKE_TO_PATH=System'
+
+          # Установка WiX Toolset 3.11 (стабильная версия)
+          $wixUrl = "https://github.com/wixtoolset/wix3/releases/download/wix3112rtm/wix311-binaries.zip"
+          $wixPath = "C:\wix"
+          New-Item -ItemType Directory -Path $wixPath -Force
+          Invoke-WebRequest -Uri $wixUrl -OutFile "$env:TEMP\wix.zip"
+          Expand-Archive -Path "$env:TEMP\wix.zip" -DestinationPath $wixPath -Force
+          $env:Path += ";$wixPath"
+          [Environment]::SetEnvironmentVariable("Path", $env:Path, "Machine")
 
           # Обновление PATH
-          Import-Module "$env:ChocolateyInstall\helpers\chocolateyProfile.psm1"
           refreshenv
 
-          # Проверка установленных версий
+          # Проверка установки
+          Write-Host "CMake version:"
           cmake --version
-          Write-Host "WiX version:"
-          heat.exe -? | Select-Object -First 1
+          Write-Host "WiX tools:"
+          Get-Command candle.exe, light.exe, heat.exe
 
-      # Подготовка Windows-specific файлов
+      # Подготовка Windows-специфичных файлов
       - name: Prepare Windows files
         if: runner.os == 'Windows'
         shell: bash
         run: |
+          # Создание RTF лицензии
           if [ ! -f LICENSE.rtf ]; then
             echo "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fnil\\fcharset0 Calibri;}}\\viewkind4\\uc1\\pard\\sa200\\sl276\\slmult1\\lang9\\f0\\fs22 Sample License Text\\par }" > LICENSE.rtf
           fi
+
+          # Скачивание иконки
           mkdir -p assets
           if [ ! -f assets/icon.ico ]; then
             curl -L -o assets/icon.ico https://raw.githubusercontent.com/microsoft/fluentui-system-icons/master/assets/App%20Icon/ic_fluent_app_icon_24_filled.ico
@@ -120,9 +130,9 @@ jobs:
           elif [ "$RUNNER_OS" = "macOS" ]; then
             cpack -G DragNDrop || cpack -G ZIP
           elif [ "$RUNNER_OS" = "Windows" ]; then
-            # Сначала пробуем создать MSI пакет
-            cpack -G WIX -C Release || echo "WIX package creation failed, check logs"
-            # Затем создаем ZIP пакет
+            # Создание MSI пакета
+            cpack -G WIX -C Release || echo "WIX package creation failed"
+            # Создание ZIP пакета
             cpack -G ZIP -C Release
           fi
           mkdir -p ../artifacts/packages
