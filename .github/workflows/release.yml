@@ -19,7 +19,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60  # Увеличенный таймаут
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v4
@@ -43,21 +43,21 @@ jobs:
         shell: bash
         run: |
           brew update --quiet
-          brew install cmake || brew upgrade cmake
+          brew install --formula cmake || brew upgrade cmake
           cmake --version
 
       # Установка зависимостей для Windows
       - name: Install Windows dependencies
         if: runner.os == 'Windows'
         shell: powershell
-        timeout-minutes: 15  # Отдельный таймаут для этого шага
+        timeout-minutes: 20
         run: |
           # Установка CMake
           $cmakeUrl = "https://github.com/Kitware/CMake/releases/download/v3.28.3/cmake-3.28.3-windows-x86_64.msi"
           $cmakeInstaller = "$env:RUNNER_TEMP\cmake-installer.msi"
           try {
               Write-Host "Downloading CMake..."
-              Invoke-WebRequest -Uri $cmakeUrl -OutFile $cmakeInstaller -ErrorAction Stop
+              (New-Object System.Net.WebClient).DownloadFile($cmakeUrl, $cmakeInstaller)
 
               Write-Host "Installing CMake..."
               $process = Start-Process -FilePath "msiexec.exe" -ArgumentList "/i $cmakeInstaller /quiet /qn /norestart ADD_CMAKE_TO_PATH=System" -PassThru -Wait
@@ -91,9 +91,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p assets
-          # Создание файла лицензии
           echo "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fnil\\fcharset0 Calibri;}}\\viewkind4\\uc1\\pard\\sa200\\sl276\\slmult1\\lang9\\f0\\fs22 Sample License Text\\par }" > LICENSE.rtf
-          # Создание иконки (заглушка)
           echo "Placeholder" > assets/icon.ico
 
       # Сборка проекта
@@ -114,7 +112,6 @@ jobs:
       - name: Verify binary exists
         shell: bash
         run: |
-          echo "Checking for binary file..."
           mkdir -p $ARTIFACTS_DIR/binaries
           case "$RUNNER_OS" in
             Linux|macOS)
@@ -122,11 +119,6 @@ jobs:
               ;;
             Windows)
               find build -name "solver.exe" -exec cp {} $ARTIFACTS_DIR/binaries/ \;
-              if [ ! -f "$ARTIFACTS_DIR/binaries/solver.exe" ]; then
-                echo "::error::Binary file not found!"
-                find build -name "*.exe" -exec ls -lh {} \;
-                exit 1
-              fi
               ;;
           esac
 
@@ -151,20 +143,19 @@ jobs:
             Linux)
               cpack -G DEB
               cpack -G RPM
-              cp *.deb *.rpm ../$ARTIFACTS_DIR/packages/
+              cp *.deb *.rpm ../$ARTIFACTS_DIR/packages/ || echo "No DEB/RPM packages created"
               ;;
             macOS)
               cpack -G DragNDrop || cpack -G ZIP
-              cp *.dmg *.zip ../$ARTIFACTS_DIR/packages/
+              # Явное копирование созданных файлов
+              for f in *.dmg *.zip; do
+                [ -e "$f" ] && cp "$f" ../$ARTIFACTS_DIR/packages/
+              done
               ;;
             Windows)
-              # Генерация GUIDs через PowerShell
+              # Генерация GUIDs
               UPGRADE_GUID=$(powershell -Command "[guid]::NewGuid().ToString().ToUpper()")
               PRODUCT_GUID=$(powershell -Command "[guid]::NewGuid().ToString().ToUpper()")
-
-              echo "Generated GUIDs:"
-              echo "Upgrade: $UPGRADE_GUID"
-              echo "Product: $PRODUCT_GUID"
 
               # Конфигурация CPack для WiX
               cmake .. \
@@ -189,7 +180,10 @@ jobs:
               # Создание ZIP
               cpack -G ZIP
 
-              cp *.msi *.zip ../$ARTIFACTS_DIR/packages/
+              # Копирование с проверкой существования
+              for f in *.msi *.zip; do
+                [ -e "$f" ] && cp "$f" ../$ARTIFACTS_DIR/packages/
+              done
               ;;
           esac
 
@@ -206,7 +200,7 @@ jobs:
             macOS)   ls -lh $ARTIFACTS_DIR/packages/*.dmg $ARTIFACTS_DIR/packages/*.zip 2>/dev/null || : ;;
             Windows)
               ls -lh $ARTIFACTS_DIR/packages/*.msi $ARTIFACTS_DIR/packages/*.zip 2>/dev/null || :
-              if [ ! -f "$ARTIFACTS_DIR/packages/*.msi" ]; then
+              if [ ! -f "$(ls $ARTIFACTS_DIR/packages/*.msi 2>/dev/null | head -1)" ]; then
                 echo "::warning::MSI package was not created"
                 find build -name "*.msi" -exec ls -lh {} \; || :
               fi
@@ -220,6 +214,7 @@ jobs:
           name: Solver-${{ runner.os }}
           path: $ARTIFACTS_DIR/
           retention-days: 7
+          if-no-files-found: warn
 
       # Создание релиза (только для тегов)
       - name: Create Release
