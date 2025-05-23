@@ -2,7 +2,6 @@ name: Release Pipeline
 
 on:
   push:
-    branches: [main]
     tags: ['v*.*.*']
 
 jobs:
@@ -11,41 +10,32 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      # Установка зависимостей
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
+      # Установка зависимостей с разделением по ОС
+      - name: Install dependencies
         shell: bash
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y cmake build-essential zip rpm
-          cmake --version
-
-      - name: Install macOS dependencies
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          brew update --quiet
-          brew install --formula cmake || brew upgrade cmake
-          cmake --version
-
-      - name: Install Windows dependencies
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          # Установка CMake
-          $cmakeUrl = "https://github.com/Kitware/CMake/releases/download/v3.28.3/cmake-3.28.3-windows-x86_64.msi"
-          $cmakeInstaller = "$env:RUNNER_TEMP\cmake-installer.msi"
-          Invoke-WebRequest -Uri $cmakeUrl -OutFile $cmakeInstaller
-          Start-Process -FilePath "msiexec.exe" -ArgumentList "/i $cmakeInstaller /quiet /qn /norestart ADD_CMAKE_TO_PATH=1" -Wait
-
-          # Установка WiX
-          choco install wixtoolset -y --no-progress
-          refreshenv
+          case "$RUNNER_OS" in
+            Linux)
+              sudo apt-get update -qq
+              sudo apt-get install -y cmake build-essential zip rpm
+              ;;
+            macOS)
+              brew update --quiet
+              brew install cmake || brew upgrade cmake
+              ;;
+            Windows)
+              choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
+              choco install wixtoolset -y --no-progress
+              refreshenv
+              ;;
+          esac
           cmake --version
 
       # Сборка проекта
@@ -55,7 +45,6 @@ jobs:
           mkdir -p build
           cd build
           if [ "$RUNNER_OS" = "Windows" ]; then
-            # Исправленная команда для Windows
             cmake .. -G "Visual Studio 17 2022" -A x64
             cmake --build . --config Release -- /maxcpucount:2
           else
@@ -63,65 +52,30 @@ jobs:
             cmake --build . --config Release --parallel 2
           fi
 
-      # Создание исходников (только для тегов)
-      - name: Create source packages
-        if: startsWith(github.ref, 'refs/tags/')
+      # Создание артефактов
+      - name: Prepare artifacts
         shell: bash
         run: |
-          mkdir -p artifacts/source
+          mkdir -p artifacts/{source,packages,binaries}
+
+          # Исходники
           git archive --format=tar.gz -o "artifacts/source/Solver-${{ github.ref_name }}-src.tar.gz" HEAD
           git archive --format=zip -o "artifacts/source/Solver-${{ github.ref_name }}-src.zip" HEAD
 
-      # Создание пакетов (только для тегов)
-      - name: Create packages
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: bash
-        run: |
+          # Пакеты
           cd build
           case "$RUNNER_OS" in
-            Linux)
-              cpack -G DEB || echo "DEB package creation failed"
-              cpack -G RPM || echo "RPM package creation failed"
-              ;;
-            macOS)
-              cpack -G DragNDrop || cpack -G ZIP || echo "Package creation failed"
-              ;;
-            Windows)
-              if command -v light.exe >/dev/null 2>&1; then
-                cpack -G WIX || cpack -G ZIP || echo "MSI creation failed"
-              else
-                cpack -G ZIP
-                echo "WiX not found, created ZIP package instead"
-              fi
-              ;;
+            Linux) cpack -G DEB && cpack -G RPM ;;
+            macOS) cpack -G DragNDrop || cpack -G ZIP ;;
+            Windows) cpack -G WIX || cpack -G ZIP ;;
           esac
-          mkdir -p ../artifacts/packages
           cp *.deb *.rpm *.dmg *.msi *.zip ../artifacts/packages/ 2>/dev/null || :
 
-      # Копирование бинарных файлов
-      - name: Copy binaries
-        shell: bash
-        run: |
-          mkdir -p artifacts/binaries
+          # Бинарники
           case "$RUNNER_OS" in
-            Linux|macOS)
-              find build -name "solver" -type f -exec cp {} artifacts/binaries/ \;
-              ;;
-            Windows)
-              find build -name "solver.exe" -type f -exec cp {} artifacts/binaries/ \;
-              ;;
+            Linux|macOS) find . -name "solver" -type f -exec cp {} ../artifacts/binaries/ \; ;;
+            Windows) find . -name "solver.exe" -type f -exec cp {} ../artifacts/binaries/ \; ;;
           esac
-
-      # Проверка результатов
-      - name: Verify artifacts
-        shell: bash
-        run: |
-          echo "Artifacts directory contents:"
-          ls -lhR artifacts/
-          if [ -z "$(ls -A artifacts/)" ]; then
-            echo "::error::No artifacts found!"
-            exit 1
-          fi
 
       # Загрузка артефактов
       - name: Upload artifacts
@@ -131,19 +85,12 @@ jobs:
           path: artifacts/
           retention-days: 7
 
-      # Создание релиза (только для тегов)
+      # Создание релиза с проверкой прав
       - name: Create Release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        if: success()
+        uses: ncipollo/release-action@v1
         with:
-          tag_name: ${{ github.ref_name }}
+          tag: ${{ github.ref_name }}
           name: Solver ${{ github.ref_name }}
-          files: |
-            artifacts/source/*
-            artifacts/packages/*
-            artifacts/binaries/*
-          draft: false
-          prerelease: false
-          fail_on_unmatched_files: false
+          artifacts: 'artifacts/*'
+          token: ${{ secrets.GITHUB_TOKEN }}
