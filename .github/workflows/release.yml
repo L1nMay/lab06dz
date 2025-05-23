@@ -15,75 +15,84 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # Установка зависимостей
+      # Установка зависимостей с оптимизацией для каждой ОС
       - name: Install dependencies
         shell: bash
         run: |
           case "$RUNNER_OS" in
             Linux)
               sudo apt-get update -qq
-              sudo apt-get install -y cmake build-essential zip rpm
+              sudo apt-get install -y --no-install-recommends cmake build-essential zip rpm
               ;;
             macOS)
               brew update --quiet
               brew install cmake || brew upgrade cmake
               ;;
             Windows)
-              # Альтернативная установка CMake для Windows
-              echo "Installing CMake via alternative method"
-              curl -L https://github.com/Kitware/CMake/releases/download/v3.28.3/cmake-3.28.3-windows-x86_64.msi -o cmake-installer.msi
-              msiexec /i cmake-installer.msi /quiet /qn /norestart ADD_CMAKE_TO_PATH=1
-              # Установка WiX через Chocolatey
-              choco install wixtoolset -y --no-progress
+              # Альтернативная установка CMake через winget (быстрее и надежнее)
+              winget install --id Kitware.CMake --silent --accept-package-agreements --accept-source-agreements
+              # WiX через Chocolatey с таймаутом
+              choco install wixtoolset -y --no-progress --timeout 900 --ignore-detected-reboot
               refreshenv
               ;;
           esac
-          cmake --version || echo "CMake check failed"
+          cmake --version
 
       # Подготовка Windows-specific файлов
       - name: Prepare Windows files
         if: runner.os == 'Windows'
         shell: bash
+        timeout-minutes: 5
         run: |
           mkdir -p assets
           if [ ! -f LICENSE.rtf ]; then
             echo "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fnil\\fcharset0 Calibri;}}\\viewkind4\\uc1\\pard\\sa200\\sl276\\slmult1\\lang9\\f0\\fs22 Sample License Text\\par }" > LICENSE.rtf
           fi
           if [ ! -f assets/icon.ico ]; then
-            echo "Placeholder icon" > assets/icon.ico
+            convert -size 64x64 xc:white assets/icon.ico || echo "Placeholder" > assets/icon.ico
           fi
 
-      # Сборка проекта
+      # Сборка проекта с оптимизацией для Windows
       - name: Configure and Build
         shell: bash
-        timeout-minutes: 30
+        timeout-minutes: 20
         run: |
           mkdir -p build
           cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release
-          cmake --build . --config Release --parallel 2
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # Оптимизированные настройки для Windows
+            cmake .. -DCMAKE_BUILD_TYPE=Release \
+                     -DCMAKE_VERBOSE_MAKEFILE=OFF \
+                     -DBUILD_TESTING=OFF \
+                     -DCMAKE_SKIP_RPATH=ON
+            cmake --build . --config Release -- /m:2 /p:CL_MPCount=2 /v:minimal
+          else
+            cmake .. -DCMAKE_BUILD_TYPE=Release
+            cmake --build . --config Release --parallel 2
+          fi
 
       # Создание исходников (только для тегов)
       - name: Create source packages
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
+        timeout-minutes: 5
         run: |
           mkdir -p artifacts/source
           git archive --format=tar.gz -o "artifacts/source/Solver-${{ github.ref_name }}-src.tar.gz" HEAD
           git archive --format=zip -o "artifacts/source/Solver-${{ github.ref_name }}-src.zip" HEAD
 
-      # Создание пакетов (только для тегов)
+      # Создание пакетов с улучшенной обработкой ошибок
       - name: Create packages
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
-        timeout-minutes: 20
+        timeout-minutes: 10
         run: |
           cd build
           case "$RUNNER_OS" in
@@ -95,7 +104,12 @@ jobs:
               cpack -G DragNDrop || cpack -G ZIP || echo "Package creation failed"
               ;;
             Windows)
-              cpack -G WIX || cpack -G ZIP || echo "Package creation failed"
+              if command -v light.exe >/dev/null 2>&1; then
+                cpack -G WIX || cpack -G ZIP || echo "MSI creation failed, falling back to ZIP"
+              else
+                cpack -G ZIP
+                echo "WiX not found, created ZIP package instead"
+              fi
               ;;
           esac
           mkdir -p ../artifacts/packages
@@ -104,6 +118,7 @@ jobs:
       # Копирование бинарных файлов
       - name: Copy binaries
         shell: bash
+        timeout-minutes: 5
         run: |
           mkdir -p artifacts/binaries
           case "$RUNNER_OS" in
@@ -115,16 +130,24 @@ jobs:
               ;;
           esac
 
-      # Проверка результатов
+      # Проверка результатов с четкой диагностикой
       - name: Verify artifacts
         shell: bash
         run: |
-          echo "Artifacts directory contents:"
-          ls -lhR artifacts/
-          if [ -z "$(ls -A artifacts/)" ]; then
-            echo "::error::No artifacts found!"
+          echo "=== Artifacts structure ==="
+          find artifacts/ -type f -exec ls -lh {} \;
+
+          if [ ! -d "artifacts" ] || [ -z "$(ls -A artifacts/)" ]; then
+            echo "::error::No artifacts were generated!"
             exit 1
           fi
+
+          echo "=== Package contents ==="
+          case "$RUNNER_OS" in
+            Linux)   ls -lh artifacts/packages/*.deb artifacts/packages/*.rpm 2>/dev/null || : ;;
+            macOS)   ls -lh artifacts/packages/*.dmg artifacts/packages/*.zip 2>/dev/null || : ;;
+            Windows) ls -lh artifacts/packages/*.msi artifacts/packages/*.zip 2>/dev/null || : ;;
+          esac
 
       # Загрузка артефактов
       - name: Upload artifacts
