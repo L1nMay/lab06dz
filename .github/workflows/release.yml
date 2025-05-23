@@ -70,35 +70,6 @@ jobs:
           if [ ! -f assets/icon.ico ]; then
             echo "Placeholder icon" > assets/icon.ico
           fi
-          # Создание файла Product.wxs для WiX
-          if [ ! -f Product.wxs ]; then
-            cat << 'EOF' > Product.wxs
-<?xml version="1.0" encoding="UTF-8"?>
-<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <Product Id="*" Name="Solver" Language="1033" Version="${{ github.ref_name | replace('v', '') }}" Manufacturer="Your Company" UpgradeCode="PUT-GUID-HERE">
-    <Package InstallerVersion="200" Compressed="yes" InstallScope="perMachine" />
-    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
-    <MediaTemplate EmbedCab="yes" />
-
-    <Feature Id="ProductFeature" Title="Solver" Level="1">
-      <ComponentRef Id="ApplicationFiles" />
-    </Feature>
-
-    <Directory Id="TARGETDIR" Name="SourceDir">
-      <Directory Id="ProgramFilesFolder">
-        <Directory Id="INSTALLFOLDER" Name="Solver">
-          <Component Id="ApplicationFiles" Guid="*">
-            <File Id="Solver.exe" Source="build/Release/solver.exe" KeyPath="yes" />
-          </Component>
-        </Directory>
-      </Directory>
-    </Directory>
-  </Product>
-</Wix>
-EOF
-            # Заменяем placeholder для версии
-            sed -i "s/Version=\"[^\"]*\"/Version=\"${{ github.ref_name | replace('v', '') }}\"/" Product.wxs
-          fi
       # Сборка проекта
       - name: Configure and Build
         shell: bash
@@ -134,15 +105,12 @@ EOF
           elif [ "$RUNNER_OS" = "macOS" ]; then
             cpack -G DragNDrop || cpack -G ZIP
           elif [ "$RUNNER_OS" = "Windows" ]; then
+            # Сначала пробуем создать MSI пакет
             if command -v heat.exe >/dev/null 2>&1; then
-              # Сначала создаем MSI пакет через WiX
-              cpack -G WIX -C Release || echo "WiX package creation failed"
-              # Затем создаем ZIP как fallback
-              cpack -G ZIP -C Release
-            else
-              cpack -G ZIP -C Release
-              echo "WiX not found, created ZIP package instead" >&2
+              cpack -G WIX || echo "WIX package creation failed, trying ZIP"
             fi
+            # Затем создаем ZIP пакет в любом случае
+            cpack -G ZIP
           fi
           mkdir -p ../artifacts/packages
           cp *.deb *.rpm *.dmg *.msi *.zip ../artifacts/packages/ 2>/dev/null || :
@@ -171,10 +139,6 @@ EOF
           else
             echo "No artifacts found!"
             exit 1
-          fi
-          # Особенная проверка для Windows MSI
-          if [ "$RUNNER_OS" = "Windows" ] && [ ! -f "artifacts/packages/*.msi" ]; then
-            echo "Warning: MSI package was not created!" >&2
           fi
       # Загрузка артефактов
       - name: Upload artifacts
