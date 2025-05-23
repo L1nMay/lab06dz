@@ -70,12 +70,12 @@ jobs:
           if [ ! -f assets/icon.ico ]; then
             echo "Placeholder icon" > assets/icon.ico
           fi
-          # Создание файла Product.wxs для WiX, если его нет
+          # Создание файла Product.wxs для WiX
           if [ ! -f Product.wxs ]; then
-            cat > Product.wxs << 'EOF'
+            cat << 'EOF' > Product.wxs
 <?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <Product Id="*" Name="Solver" Language="1033" Version="${{ github.ref_name | replace('v', '') }}" Manufacturer="Your Company" UpgradeCode="$(uuidgen || echo '00000000-0000-0000-0000-000000000000')">
+  <Product Id="*" Name="Solver" Language="1033" Version="${{ github.ref_name | replace('v', '') }}" Manufacturer="Your Company" UpgradeCode="PUT-GUID-HERE">
     <Package InstallerVersion="200" Compressed="yes" InstallScope="perMachine" />
     <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
     <MediaTemplate EmbedCab="yes" />
@@ -96,6 +96,8 @@ jobs:
   </Product>
 </Wix>
 EOF
+            # Заменяем placeholder для версии
+            sed -i "s/Version=\"[^\"]*\"/Version=\"${{ github.ref_name | replace('v', '') }}\"/" Product.wxs
           fi
       # Сборка проекта
       - name: Configure and Build
@@ -108,8 +110,7 @@ EOF
               -DCPACK_WIX_UPGRADE_GUID="$(uuidgen || echo '00000000-0000-0000-0000-000000000000')" \
               -DCPACK_WIX_PRODUCT_GUID="$(uuidgen || echo '11111111-1111-1111-1111-111111111111')" \
               -DCPACK_WIX_LICENSE_RTF="../LICENSE.rtf" \
-              -DCPACK_WIX_PRODUCT_ICON="../assets/icon.ico" \
-              -DCPACK_WIX_TEMPLATE="../Product.wxs"
+              -DCPACK_WIX_PRODUCT_ICON="../assets/icon.ico"
           else
             cmake .. -DCMAKE_BUILD_TYPE=Release
           fi
