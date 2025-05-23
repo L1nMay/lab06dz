@@ -35,6 +35,17 @@ endif()
 install(TARGETS solver DESTINATION bin)
 
 # Настройки CPack
+# В разделе CPack настройки добавьте:
+if(WIN32)
+    set(CPACK_GENERATOR "WIX;ZIP")
+    # Дополнительные настройки для WiX
+    set(CPACK_WIX_UPGRADE_GUID "YOUR-GUID-HERE") # Замените на реальный GUID
+    set(CPACK_WIX_PRODUCT_GUID "YOUR-GUID-HERE") # Замените на реальный GUID
+    set(CPACK_WIX_LICENSE_RTF "${CMAKE_SOURCE_DIR}/LICENSE.rtf")
+    set(CPACK_WIX_PRODUCT_ICON "${CMAKE_SOURCE_DIR}/assets/icon.ico")
+    set(CPACK_WIX_CULTURES "en-us")
+    set(CPACK_WIX_TEMPLATE "${CMAKE_SOURCE_DIR}/WixTemplate.wxi") # Если нужно
+endif()
 set(CPACK_PACKAGE_NAME "${PROJECT_NAME}")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
 set(CPACK_PACKAGE_DESCRIPTION "Simple equation solver")

@@ -149,19 +149,24 @@ jobs:
             artifacts/*
           retention-days: 7
 
-      # Создание релиза (только для тегов)
-      - name: Create Release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: Solver ${{ github.ref_name }}
-          files: |
-            artifacts/source/*
-            artifacts/packages/*
-            artifacts/binaries/*
-          draft: false
-          prerelease: false
-          fail_on_unmatched_files: false
+- name: Create packages
+  if: startsWith(github.ref, 'refs/tags/')
+  shell: bash
+  run: |
+    cd build
+    if [ "$RUNNER_OS" = "Linux" ]; then
+      cpack -G DEB && cpack -G RPM
+    elif [ "$RUNNER_OS" = "macOS" ]; then
+      cpack -G DragNDrop || cpack -G ZIP
+    elif [ "$RUNNER_OS" = "Windows" ]; then
+      # Явно пытаемся создать MSI, если не получится - создаем ZIP
+      if command -v heat.exe >/dev/null 2>&1; then
+        cpack -G WIX || (echo "WIX failed, creating ZIP instead" && cpack -G ZIP)
+      else
+        cpack -G ZIP
+        echo "WiX not found, created ZIP package instead" >&2
+      fi
+    fi
+    mkdir -p ../artifacts/packages
+    # Копируем все созданные пакеты
+    cp *.deb *.rpm *.dmg *.msi *.zip ../artifacts/packages/ 2>/dev/null || :
