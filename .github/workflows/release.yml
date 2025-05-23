@@ -11,6 +11,7 @@ permissions:
 
 env:
   WIX_ROOT: C:\Program Files (x86)\WiX Toolset v3.11\
+  ARTIFACTS_DIR: artifacts
 
 jobs:
   build:
@@ -18,14 +19,14 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 60  # Увеличенный таймаут
 
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # Установка зависимостей
+      # Установка зависимостей для Linux
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         shell: bash
@@ -36,27 +37,48 @@ jobs:
             libjsoncpp-dev librhash-dev
           cmake --version
 
+      # Установка зависимостей для macOS
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
         shell: bash
         run: |
           brew update --quiet
-          brew install --formula cmake || brew upgrade cmake
+          brew install cmake || brew upgrade cmake
           cmake --version
 
+      # Установка зависимостей для Windows
       - name: Install Windows dependencies
         if: runner.os == 'Windows'
         shell: powershell
+        timeout-minutes: 15  # Отдельный таймаут для этого шага
         run: |
           # Установка CMake
           $cmakeUrl = "https://github.com/Kitware/CMake/releases/download/v3.28.3/cmake-3.28.3-windows-x86_64.msi"
           $cmakeInstaller = "$env:RUNNER_TEMP\cmake-installer.msi"
-          Invoke-WebRequest -Uri $cmakeUrl -OutFile $cmakeInstaller
-          Start-Process -FilePath "msiexec.exe" -ArgumentList "/i $cmakeInstaller /quiet /qn /norestart ADD_CMAKE_TO_PATH=System" -Wait
+          try {
+              Write-Host "Downloading CMake..."
+              Invoke-WebRequest -Uri $cmakeUrl -OutFile $cmakeInstaller -ErrorAction Stop
 
-          # Установка WiX через Chocolatey
-          choco install wixtoolset -y --no-progress --ignore-detected-reboot
-          refreshenv
+              Write-Host "Installing CMake..."
+              $process = Start-Process -FilePath "msiexec.exe" -ArgumentList "/i $cmakeInstaller /quiet /qn /norestart ADD_CMAKE_TO_PATH=System" -PassThru -Wait
+              if ($process.ExitCode -ne 0) {
+                  Write-Error "CMake installation failed with exit code $($process.ExitCode)"
+                  exit 1
+              }
+          } catch {
+              Write-Error "Failed to install CMake: $_"
+              exit 1
+          }
+
+          # Установка WiX
+          try {
+              Write-Host "Installing WiX Toolset..."
+              choco install wixtoolset -y --no-progress --ignore-detected-reboot
+              refreshenv
+          } catch {
+              Write-Error "Failed to install WiX Toolset: $_"
+              exit 1
+          }
 
           # Проверка установки
           cmake --version
@@ -71,7 +93,6 @@ jobs:
           mkdir -p assets
           # Создание файла лицензии
           echo "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fnil\\fcharset0 Calibri;}}\\viewkind4\\uc1\\pard\\sa200\\sl276\\slmult1\\lang9\\f0\\fs22 Sample License Text\\par }" > LICENSE.rtf
-
           # Создание иконки (заглушка)
           echo "Placeholder" > assets/icon.ico
 
@@ -89,19 +110,21 @@ jobs:
             cmake --build . --config Release --parallel 2
           fi
 
-      # Проверка бинарного файла (особенно для Windows)
+      # Проверка бинарного файла
       - name: Verify binary exists
         shell: bash
         run: |
           echo "Checking for binary file..."
+          mkdir -p $ARTIFACTS_DIR/binaries
           case "$RUNNER_OS" in
             Linux|macOS)
-              find build -name "solver" -exec ls -lh {} \;
+              find build -name "solver" -exec cp {} $ARTIFACTS_DIR/binaries/ \;
               ;;
             Windows)
-              find build -name "solver.exe" -exec ls -lh {} \;
-              if [ ! -f "build/Release/solver.exe" ]; then
-                echo "::error::solver.exe not found in build/Release/"
+              find build -name "solver.exe" -exec cp {} $ARTIFACTS_DIR/binaries/ \;
+              if [ ! -f "$ARTIFACTS_DIR/binaries/solver.exe" ]; then
+                echo "::error::Binary file not found!"
+                find build -name "*.exe" -exec ls -lh {} \;
                 exit 1
               fi
               ;;
@@ -112,34 +135,36 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
-          mkdir -p artifacts/source
-          git archive --format=tar.gz -o "artifacts/source/Solver-${{ github.ref_name }}-src.tar.gz" HEAD
-          git archive --format=zip -o "artifacts/source/Solver-${{ github.ref_name }}-src.zip" HEAD
+          mkdir -p $ARTIFACTS_DIR/source
+          git archive --format=tar.gz -o "$ARTIFACTS_DIR/source/Solver-${{ github.ref_name }}-src.tar.gz" HEAD
+          git archive --format=zip -o "$ARTIFACTS_DIR/source/Solver-${{ github.ref_name }}-src.zip" HEAD
 
       # Создание пакетов (только для тегов)
       - name: Create packages
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
+          mkdir -p $ARTIFACTS_DIR/packages
           cd build
+
           case "$RUNNER_OS" in
             Linux)
               cpack -G DEB
               cpack -G RPM
+              cp *.deb *.rpm ../$ARTIFACTS_DIR/packages/
               ;;
             macOS)
               cpack -G DragNDrop || cpack -G ZIP
+              cp *.dmg *.zip ../$ARTIFACTS_DIR/packages/
               ;;
             Windows)
               # Генерация GUIDs через PowerShell
-              UPGRADE_GUID="$(powershell -Command "[guid]::NewGuid().ToString().ToUpper()")"
-              PRODUCT_GUID="$(powershell -Command "[guid]::NewGuid().ToString().ToUpper()")"
-              COMPONENT_GUID="$(powershell -Command "[guid]::NewGuid().ToString().ToUpper()")"
+              UPGRADE_GUID=$(powershell -Command "[guid]::NewGuid().ToString().ToUpper()")
+              PRODUCT_GUID=$(powershell -Command "[guid]::NewGuid().ToString().ToUpper()")
 
-              echo "Generated GUIDs for Windows package:"
+              echo "Generated GUIDs:"
               echo "Upgrade: $UPGRADE_GUID"
               echo "Product: $PRODUCT_GUID"
-              echo "Component: $COMPONENT_GUID"
 
               # Конфигурация CPack для WiX
               cmake .. \
@@ -153,42 +178,36 @@ jobs:
                 -DCPACK_WIX_LICENSE_RTF="../LICENSE.rtf" \
                 -DCPACK_WIX_UI_REF="WixUI_InstallDir"
 
-              # Пересборка с новой конфигурацией
+              # Пересборка
               cmake --build . --config Release
 
-              # Создание MSI пакета
-              echo "Creating MSI package..."
+              # Создание MSI
               cpack -G WIX -C Release || (echo "CPack failed, trying manual WiX build" && \
                 candle.exe -arch x64 -out "installer.wixobj" "../installer.wxs" && \
                 light.exe -ext WixUIExtension -out "Solver-${{ github.ref_name }}.msi" "installer.wixobj")
 
-              # Создание ZIP как fallback
+              # Создание ZIP
               cpack -G ZIP
+
+              cp *.msi *.zip ../$ARTIFACTS_DIR/packages/
               ;;
           esac
 
-          # Копирование созданных пакетов
-          mkdir -p ../artifacts/packages
-          cp *.deb *.rpm *.dmg *.msi *.zip ../artifacts/packages/ 2>/dev/null || :
-
-      # Проверка результатов
+      # Проверка артефактов
       - name: Verify artifacts
         shell: bash
         run: |
           echo "=== Artifacts structure ==="
-          find artifacts/ -type f -exec ls -lh {} \;
+          find $ARTIFACTS_DIR/ -type f -exec ls -lh {} \; || echo "No artifacts found"
 
           echo "=== Package contents ==="
           case "$RUNNER_OS" in
-            Linux)   ls -lh artifacts/packages/*.deb artifacts/packages/*.rpm 2>/dev/null || : ;;
-            macOS)   ls -lh artifacts/packages/*.dmg artifacts/packages/*.zip 2>/dev/null || : ;;
+            Linux)   ls -lh $ARTIFACTS_DIR/packages/*.deb $ARTIFACTS_DIR/packages/*.rpm 2>/dev/null || : ;;
+            macOS)   ls -lh $ARTIFACTS_DIR/packages/*.dmg $ARTIFACTS_DIR/packages/*.zip 2>/dev/null || : ;;
             Windows)
-              ls -lh artifacts/packages/*.msi artifacts/packages/*.zip 2>/dev/null || :
-              if ls artifacts/packages/*.msi 1> /dev/null 2>&1; then
-                echo "MSI package created successfully"
-              else
+              ls -lh $ARTIFACTS_DIR/packages/*.msi $ARTIFACTS_DIR/packages/*.zip 2>/dev/null || :
+              if [ ! -f "$ARTIFACTS_DIR/packages/*.msi" ]; then
                 echo "::warning::MSI package was not created"
-                echo "Trying to find any generated MSI files..."
                 find build -name "*.msi" -exec ls -lh {} \; || :
               fi
               ;;
@@ -199,7 +218,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Solver-${{ runner.os }}
-          path: artifacts/
+          path: $ARTIFACTS_DIR/
           retention-days: 7
 
       # Создание релиза (только для тегов)
@@ -212,9 +231,9 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: Solver ${{ github.ref_name }}
           files: |
-            artifacts/source/*
-            artifacts/packages/*
-            artifacts/binaries/*
+            $ARTIFACTS_DIR/source/*
+            $ARTIFACTS_DIR/packages/*
+            $ARTIFACTS_DIR/binaries/*
           draft: false
           prerelease: false
           fail_on_unmatched_files: false
