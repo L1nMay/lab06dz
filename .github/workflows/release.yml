@@ -22,83 +22,54 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Установка зависимостей для Linux
-      - name: Install Linux dependencies
+      # Установка зависимостей для Ubuntu
+      - name: Install dependencies (Ubuntu)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake build-essential zip rpm python3 uuid-runtime
+          sudo apt-get install -y cmake build-essential zip rpm
           cmake --version
-
       # Установка зависимостей для macOS
-      - name: Install macOS dependencies
+      - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
           brew update
-          brew install cmake python
+          brew install --formula cmake
           cmake --version
-
-      # Установка зависимостей для Windows
-      - name: Install Windows dependencies
+      # Установка зависимостей для Windows с улучшенной обработкой ошибок
+      - name: Install dependencies (Windows)
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          # Установка WiX Toolset
-          $wixUrl = "https://github.com/wixtoolset/wix3/releases/download/wix3112rtm/wix311-binaries.zip"
-          $wixPath = "$env:RUNNER_TEMP\wix"
-          New-Item -ItemType Directory -Path $wixPath -Force
-          Invoke-WebRequest -Uri $wixUrl -OutFile "$env:RUNNER_TEMP\wix.zip"
-          Expand-Archive -Path "$env:RUNNER_TEMP\wix.zip" -DestinationPath $wixPath -Force
-          echo "$wixPath" | Out-File -FilePath $env:GITHUB_PATH -Append
-
-          # Установка CMake и Python
-          choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y --no-progress
-          choco install python -y --no-progress
-          refreshenv
-
-      # Подготовка Windows-файлов
+          $ErrorActionPreference = 'Stop'
+          $ProgressPreference = 'SilentlyContinue'
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          try {
+            if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
+              Set-ExecutionPolicy Bypass -Scope Process -Force
+              [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+              iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+            }
+            choco install cmake --version=3.28.1 -y --no-progress --fail-on-error-output --timeout 900
+            choco install wixtoolset -y --no-progress
+            refreshenv
+            cmake --version
+          } catch {
+            Write-Error "Failed to install dependencies: $_"
+            exit 1
+          }
+      # Подготовка Windows-specific файлов
       - name: Prepare Windows files
         if: runner.os == 'Windows'
-        shell: powershell
+        shell: bash
         run: |
-          # Создание директории wix
-          New-Item -ItemType Directory -Path wix -Force
-
-          # Создание файла лицензии
-          @"
-{\rtf1\ansi\deff0{\fonttbl{\f0\fnil\fcharset0 Calibri;}}\viewkind4\uc1\pard\sa200\sl276\slmult1\lang9\f0\fs22 Sample License Text\par }
-"@ | Out-File -FilePath wix/LICENSE.rtf -Encoding ASCII
-
-          # Скачивание иконки
-          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/master/assets/App%20Icon/ic_fluent_app_icon_24_filled.ico" -OutFile wix/icon.ico
-
-          # Создание WXS файла
-          @"
-<?xml version="1.0"?>
-<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <Product Id="*" Name="Solver" Language="1033" Version="1.0.0"
-         Manufacturer="Your Company" UpgradeCode="PUT-UPGRADE-CODE-HERE">
-    <Package InstallerVersion="200" Compressed="yes" Comments="Windows Installer Package"/>
-    <Media Id="1" Cabinet="media1.cab" EmbedCab="yes"/>
-    <Directory Id="TARGETDIR" Name="SourceDir">
-      <Directory Id="ProgramFilesFolder">
-        <Directory Id="INSTALLDIR" Name="Solver">
-          <Component Id="ApplicationFiles" Guid="*">
-            <File Id="ApplicationFile" Source="PUT-SOURCE-PATH-HERE" KeyPath="yes"/>
-          </Component>
-        </Directory>
-      </Directory>
-    </Directory>
-    <Feature Id="DefaultFeature" Level="1">
-      <ComponentRef Id="ApplicationFiles"/>
-    </Feature>
-    <Icon Id="icon.ico" SourceFile="PUT-ICON-PATH-HERE"/>
-    <Property Id="ARPPRODUCTICON" Value="icon.ico"/>
-    <WixVariable Id="WixUILicenseRtf" Value="PUT-LICENSE-PATH-HERE"/>
-  </Product>
-</Wix>
-"@ | Out-File -FilePath wix/installer.wxs -Encoding ASCII
-
+          if [ ! -f LICENSE.rtf ]; then
+            echo "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fnil\\fcharset0 Calibri;}}\\viewkind4\\uc1\\pard\\sa200\\sl276\\slmult1\\lang9\\f0\\fs22 Sample License Text\\par }" > LICENSE.rtf
+          fi
+          mkdir -p assets
+          if [ ! -f assets/icon.ico ]; then
+            echo "Placeholder icon" > assets/icon.ico
+          fi
       # Сборка проекта
       - name: Configure and Build
         shell: bash
@@ -106,13 +77,15 @@ jobs:
           mkdir -p build
           cd build
           if [ "$RUNNER_OS" = "Windows" ]; then
-            # Для Windows явно указываем выходной каталог
-            cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE=$(pwd)/Release
+            cmake .. -DCMAKE_BUILD_TYPE=Release \
+              -DCPACK_WIX_UPGRADE_GUID="$(uuidgen || echo '00000000-0000-0000-0000-000000000000')" \
+              -DCPACK_WIX_PRODUCT_GUID="$(uuidgen || echo '11111111-1111-1111-1111-111111111111')" \
+              -DCPACK_WIX_LICENSE_RTF="../LICENSE.rtf" \
+              -DCPACK_WIX_PRODUCT_ICON="../assets/icon.ico"
           else
             cmake .. -DCMAKE_BUILD_TYPE=Release
           fi
           cmake --build . --config Release --parallel 2
-
       # Создание исходников (только для тегов)
       - name: Create source packages
         if: startsWith(github.ref, 'refs/tags/')
@@ -121,93 +94,60 @@ jobs:
           mkdir -p artifacts/source
           git archive --format=tar.gz -o artifacts/source/Solver-${{ github.ref_name }}-src.tar.gz HEAD
           git archive --format=zip -o artifacts/source/Solver-${{ github.ref_name }}-src.zip HEAD
-
       # Создание пакетов (только для тегов)
       - name: Create packages
         if: startsWith(github.ref, 'refs/tags/')
-        shell: powershell
+        shell: bash
         run: |
-          mkdir -p artifacts/packages
           cd build
-
-          if ($env:RUNNER_OS -eq "Linux") {
-            bash -c "cpack -G DEB && cpack -G RPM"
-            cp *.deb *.rpm ../artifacts/packages/ -ErrorAction SilentlyContinue
-          }
-          elseif ($env:RUNNER_OS -eq "macOS") {
-            bash -c "cpack -G ZIP && cpack -G DragNDrop"
-            cp *.zip *.dmg ../artifacts/packages/ -ErrorAction SilentlyContinue
-          }
-          elseif ($env:RUNNER_OS -eq "Windows") {
-            # Генерация GUID
-            $UPGRADE_CODE = python -c "import uuid; print(str(uuid.uuid4()).upper())"
-
-            # Полные пути к файлам
-            $SOURCE_PATH = "$(Get-Location)\Release\solver.exe"
-            $ICON_PATH = "$(Get-Location)\..\wix\icon.ico"
-            $LICENSE_PATH = "$(Get-Location)\..\wix\LICENSE.rtf"
-
-            # Подготовка WXS файла
-            (Get-Content ..\wix\installer.wxs) |
-              ForEach-Object { $_ -replace "PUT-UPGRADE-CODE-HERE", $UPGRADE_CODE } |
-              ForEach-Object { $_ -replace "PUT-SOURCE-PATH-HERE", $SOURCE_PATH } |
-              ForEach-Object { $_ -replace "PUT-ICON-PATH-HERE", $ICON_PATH } |
-              ForEach-Object { $_ -replace "PUT-LICENSE-PATH-HERE", $LICENSE_PATH } |
-              Set-Content ..\wix\installer.wxs
-
-            # Сборка MSI
-            & "$env:RUNNER_TEMP\wix\candle.exe" ..\wix\installer.wxs -out installer.wixobj
-            & "$env:RUNNER_TEMP\wix\light.exe" installer.wixobj -out "Solver-${{ github.ref_name }}-Windows.msi" -ext WixUIExtension
-            cp *.msi ../artifacts/packages/ -ErrorAction SilentlyContinue
-
-            # Дополнительно создаем ZIP
-            cpack -G ZIP
-            cp *.zip ../artifacts/packages/ -ErrorAction SilentlyContinue
-          }
-
-          Write-Host "Created packages:"
-          ls ../artifacts/packages/ -ErrorAction SilentlyContinue
-
-      # Копирование бинарных файлов (только для тегов)
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            cpack -G DEB && cpack -G RPM
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            cpack -G DragNDrop || cpack -G ZIP
+          elif [ "$RUNNER_OS" = "Windows" ]; then
+            if command -v heat.exe >/dev/null 2>&1; then
+              cpack -G WIX || cpack -G ZIP
+            else
+              cpack -G ZIP
+              echo "WiX not found, created ZIP package instead" >&2
+            fi
+          fi
+          mkdir -p ../artifacts/packages
+          cp *.deb *.rpm *.dmg *.msi *.zip ../artifacts/packages/ 2>/dev/null || :
+      # Копирование бинарных файлов
       - name: Copy binaries
-        if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
           mkdir -p artifacts/binaries
           case "$RUNNER_OS" in
             Linux|macOS)
-              find build -name "solver" -type f -exec cp {} artifacts/binaries/ || :
+              find build -name "solver" -type f -exec cp {} artifacts/binaries/ \;
               ;;
             Windows)
-              find build/Release -name "solver.exe" -type f -exec cp {} artifacts/binaries/ || :
+              find build -name "solver.exe" -type f -exec cp {} artifacts/binaries/ \;
               ;;
           esac
-
-      # Проверка результатов (только для тегов)
+      # Проверка результатов
       - name: Verify artifacts
-        if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
           echo "Artifacts directory contents:"
-          ls -lhR artifacts/ || :
-          if [ ! -z "$(ls -A artifacts/ 2>/dev/null)" ]; then
+          ls -lhR artifacts/
+          if [ ! -z "$(ls -A artifacts/)" ]; then
             echo "Artifacts found:"
             ls -lh artifacts/*
           else
             echo "No artifacts found!"
             exit 1
           fi
-
-      # Загрузка артефактов (только для тегов)
+      # Загрузка артефактов
       - name: Upload artifacts
-        if: startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-artifact@v4
         with:
           name: Solver-${{ runner.os }}
           path: |
             artifacts/*
           retention-days: 7
-          if-no-files-found: warn
 
       # Создание релиза (только для тегов)
       - name: Create Release
