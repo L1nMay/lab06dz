@@ -30,18 +30,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake build-essential zip rpm python3 uuid-runtime
           cmake --version
-          python3 --version
 
-      # Установка зависимостей для macOS (исправленная)
+      # Установка зависимостей для macOS (без предупреждений)
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
         run: |
           brew update
-          brew install cmake python
+          brew install --formula cmake python
           cmake --version
-          python3 --version
 
-      # Установка зависимостей для Windows (улучшенная)
+      # Установка зависимостей для Windows
       - name: Install Windows dependencies
         if: runner.os == 'Windows'
         shell: powershell
@@ -54,14 +52,10 @@ jobs:
           Expand-Archive -Path "$env:RUNNER_TEMP\wix.zip" -DestinationPath $wixPath -Force
           echo "$wixPath" | Out-File -FilePath $env:GITHUB_PATH -Append
 
-          # Установка CMake (последняя версия)
+          # Установка CMake и Python
           choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y --no-progress
           choco install python -y --no-progress
           refreshenv
-
-          cmake --version
-          python --version
-          Get-Command candle.exe, light.exe, heat.exe | % { $_.Source }
 
       # Подготовка Windows-файлов
       - name: Prepare Windows files
@@ -72,6 +66,33 @@ jobs:
           echo "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fnil\\fcharset0 Calibri;}}\\viewkind4\\uc1\\pard\\sa200\\sl276\\slmult1\\lang9\\f0\\fs22 Sample License Text\\par }" > wix/LICENSE.rtf
           curl -sSL -o wix/assets/icon.ico https://raw.githubusercontent.com/microsoft/fluentui-system-icons/master/assets/App%20Icon/ic_fluent_app_icon_24_filled.ico
 
+          # WXS-файл с исправленным форматом версии
+          cat << 'EOF' > wix/installer.wxs
+          <?xml version="1.0"?>
+          <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+            <Product Id="*" Name="Solver" Language="1033" Version="1.0.0"
+                   Manufacturer="Your Company" UpgradeCode="$(var.UpgradeCode)">
+              <Package InstallerVersion="200" Compressed="yes" Comments="Windows Installer Package"/>
+              <Media Id="1" Cabinet="media1.cab" EmbedCab="yes"/>
+              <Directory Id="TARGETDIR" Name="SourceDir">
+                <Directory Id="ProgramFilesFolder">
+                  <Directory Id="INSTALLDIR" Name="Solver">
+                    <Component Id="ApplicationFiles" Guid="*">
+                      <File Id="ApplicationFile" Source="$(var.SourcePath)" KeyPath="yes"/>
+                    </Component>
+                  </Directory>
+                </Directory>
+              </Directory>
+              <Feature Id="DefaultFeature" Level="1">
+                <ComponentRef Id="ApplicationFiles"/>
+              </Feature>
+              <Icon Id="icon.ico" SourceFile="$(var.IconPath)"/>
+              <Property Id="ARPPRODUCTICON" Value="icon.ico"/>
+              <WixVariable Id="WixUILicenseRtf" Value="$(var.LicensePath)"/>
+            </Product>
+          </Wix>
+          EOF
+
       # Сборка проекта
       - name: Configure and Build
         shell: bash
@@ -80,6 +101,15 @@ jobs:
           cd build
           cmake .. -DCMAKE_BUILD_TYPE=Release
           cmake --build . --config Release --parallel 2
+
+      # Создание исходников (только для тегов)
+      - name: Create source packages
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          mkdir -p artifacts/source
+          git archive --format=tar.gz -o artifacts/source/Solver-${{ github.ref_name }}-src.tar.gz HEAD
+          git archive --format=zip -o artifacts/source/Solver-${{ github.ref_name }}-src.zip HEAD
 
       # Создание пакетов (только для тегов)
       - name: Create packages
@@ -91,23 +121,22 @@ jobs:
 
           if [ "$RUNNER_OS" = "Linux" ]; then
             cpack -G DEB && cpack -G RPM
-            cp *.deb *.rpm ../artifacts/packages/ || echo "No DEB/RPM packages found"
+            cp *.deb *.rpm ../artifacts/packages/ || :
 
           elif [ "$RUNNER_OS" = "macOS" ]; then
-            # Сначала пробуем создать DMG, затем ZIP
-            cpack -G DragNDrop || echo "Failed to create DMG package"
-            cpack -G ZIP || echo "Failed to create ZIP package"
+            cpack -G DragNDrop || cpack -G ZIP
             cp *.dmg *.zip ../artifacts/packages/ 2>/dev/null || :
 
           elif [ "$RUNNER_OS" = "Windows" ]; then
             # Генерация GUID
             UPGRADE_CODE=$(python -c "import uuid; print(str(uuid.uuid4()).upper())")
-            PRODUCT_CODE=$(python -c "import uuid; print(str(uuid.uuid4()).upper())")
+
+            # Извлекаем версию из тега (формат vX.Y.Z -> X.Y.0)
+            VERSION=$(echo "${{ github.ref_name }}" | sed 's/^v//' | awk -F. '{printf "%d.%d.0", $1, $2}')
 
             # Сборка MSI
-            candle.exe -dVersion=${{ github.ref_name }} \
+            candle.exe -dVersion="$VERSION" \
                       -dUpgradeCode="$UPGRADE_CODE" \
-                      -dProductCode="$PRODUCT_CODE" \
                       -dSourcePath="$(pwd)/Release/solver.exe" \
                       -dIconPath="../wix/assets/icon.ico" \
                       -dLicensePath="../wix/LICENSE.rtf" \
@@ -122,10 +151,11 @@ jobs:
           fi
 
           echo "Created packages:"
-          ls -lh ../artifacts/packages/ || echo "No packages were created"
+          ls -lh ../artifacts/packages/ || :
 
-      # Копирование бинарных файлов
+      # Копирование бинарных файлов (только для тегов)
       - name: Copy binaries
+        if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
           mkdir -p artifacts/binaries
@@ -138,12 +168,13 @@ jobs:
               ;;
           esac
 
-      # Проверка результатов
+      # Проверка результатов (только для тегов)
       - name: Verify artifacts
+        if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
           echo "Artifacts directory contents:"
-          ls -lhR artifacts/ || echo "No artifacts found"
+          ls -lhR artifacts/ || :
           if [ ! -z "$(ls -A artifacts/ 2>/dev/null)" ]; then
             echo "Artifacts found:"
             ls -lh artifacts/*
@@ -152,15 +183,16 @@ jobs:
             exit 1
           fi
 
-      # Загрузка артефактов
+      # Загрузка артефактов (только для тегов)
       - name: Upload artifacts
+        if: startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-artifact@v4
         with:
           name: Solver-${{ runner.os }}
           path: |
             artifacts/*
           retention-days: 7
-          if-no-files-found: warn
+          if-no-files-found: error
 
       # Создание релиза (только для тегов)
       - name: Create Release
@@ -177,4 +209,4 @@ jobs:
             artifacts/binaries/*
           draft: false
           prerelease: false
-          fail_on_unmatched_files: false
+          fail_on_unmatched_files: true
