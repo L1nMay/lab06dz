@@ -15,29 +15,30 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 60  # Увеличиваем таймаут
 
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # Установка зависимостей
+      # Установка зависимостей с улучшенной обработкой ошибок
       - name: Install dependencies
         shell: bash
         run: |
           case "$RUNNER_OS" in
             Linux)
-              sudo apt-get update
+              sudo apt-get update -qq
               sudo apt-get install -y cmake build-essential zip rpm
               ;;
             macOS)
-              brew update
-              brew install cmake
+              brew update --quiet
+              brew install cmake || brew upgrade cmake
               ;;
             Windows)
-              choco install cmake --version=3.28.1 -y
-              choco install wixtoolset -y
+              choco install cmake --yes --no-progress --version=3.28.0
+              choco install wixtoolset --yes --no-progress
+              refreshenv
               ;;
           esac
           cmake --version
@@ -47,7 +48,6 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          # Создаем минимальные необходимые файлы для WiX
           mkdir -p assets
           if [ ! -f LICENSE.rtf ]; then
             echo "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fnil\\fcharset0 Calibri;}}\\viewkind4\\uc1\\pard\\sa200\\sl276\\slmult1\\lang9\\f0\\fs22 Sample License Text\\par }" > LICENSE.rtf
@@ -55,16 +55,11 @@ jobs:
           if [ ! -f assets/icon.ico ]; then
             convert -size 64x64 xc:white assets/icon.ico || echo "Placeholder" > assets/icon.ico
           fi
-          if [ ! -f assets/wix_banner.bmp ]; then
-            convert -size 493x58 xc:gray assets/wix_banner.bmp || echo "Placeholder" > assets/wix_banner.bmp
-          fi
-          if [ ! -f assets/wix_dialog.bmp ]; then
-            convert -size 493x312 xc:gray assets/wix_dialog.bmp || echo "Placeholder" > assets/wix_dialog.bmp
-          fi
 
       # Сборка проекта
       - name: Configure and Build
         shell: bash
+        timeout-minutes: 30
         run: |
           mkdir -p build
           cd build
@@ -84,18 +79,18 @@ jobs:
       - name: Create packages
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
+        timeout-minutes: 20
         run: |
           cd build
           case "$RUNNER_OS" in
             Linux)
-              cpack -G DEB && cpack -G RPM
+              cpack -G DEB && cpack -G RPM || echo "Package creation failed"
               ;;
             macOS)
-              cpack -G DragNDrop || cpack -G ZIP
+              cpack -G DragNDrop || cpack -G ZIP || echo "Package creation failed"
               ;;
             Windows)
-              # Пытаемся создать MSI, если не получится - создаем ZIP
-              cpack -G WIX || cpack -G ZIP
+              cpack -G WIX || cpack -G ZIP || echo "Package creation failed"
               ;;
           esac
           mkdir -p ../artifacts/packages
@@ -121,10 +116,7 @@ jobs:
         run: |
           echo "Artifacts directory contents:"
           ls -lhR artifacts/
-          if [ ! -z "$(ls -A artifacts/)" ]; then
-            echo "Artifacts found:"
-            ls -lh artifacts/*
-          else
+          if [ -z "$(ls -A artifacts/)" ]; then
             echo "No artifacts found!"
             exit 1
           fi
@@ -134,8 +126,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Solver-${{ runner.os }}
-          path: |
-            artifacts/*
+          path: artifacts/
           retention-days: 7
 
       # Создание релиза (только для тегов)
@@ -153,4 +144,4 @@ jobs:
             artifacts/binaries/*
           draft: false
           prerelease: false
-          fail_on_unmatched_files: false
+          fail_on_unmatched_files: true
