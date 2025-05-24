@@ -31,7 +31,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake build-essential zip rpm imagemagick
+          sudo apt-get install -y cmake build-essential zip rpm
           cmake --version
 
       # Установка зависимостей для macOS
@@ -39,7 +39,7 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           brew update
-          brew install --formula cmake create-dmg imagemagick
+          brew install --formula cmake create-dmg
           cmake --version
 
       # Установка WiX Toolset и зависимостей для Windows
@@ -47,19 +47,20 @@ jobs:
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          # Устанавливаем WiX Toolset
-          choco install wixtoolset -y --no-progress --force
+          # Удаляем старую версию и устанавливаем конкретную версию WiX
+          choco uninstall wixtoolset -y
+          choco install wixtoolset -y --version 3.11.2 --no-progress
+
+          # Устанавливаем CMake
+          choco install cmake -y --no-progress
+
+          # Устанавливаем ImageMagick для создания иконок
+          choco install imagemagick -y --no-progress
 
           # Добавляем WiX в PATH
-          $wixPath = "${env:ProgramFiles(x86)}\WiX Toolset v3.14\bin"
-          if (Test-Path $wixPath) {
-              echo "WIX_PATH=$wixPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-              echo "$wixPath" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          }
-
-          # Устанавливаем CMake и ImageMagick
-          choco install cmake -y --no-progress
-          choco install imagemagick -y --no-progress
+          $wixPath = "${env:ProgramFiles(x86)}\WiX Toolset v3.11\bin"
+          echo "WIX_PATH=$wixPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "$wixPath" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
           # Обновляем переменные среды
           refreshenv
@@ -67,20 +68,32 @@ jobs:
           # Проверяем установку
           cmake --version
           magick --version
+
+      # Проверка установки WiX
+      - name: Verify WiX installation
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          Write-Host "Проверка инструментов WiX:"
           heat.exe -?
           candle.exe -?
           light.exe -?
+          Write-Host "Инструменты WiX доступны"
 
-      # Подготовка Windows-специфичных файлов (исправленная версия)
+      # Подготовка Windows-специфичных файлов
       - name: Prepare Windows files
         if: runner.os == 'Windows'
         shell: bash
         run: |
           mkdir -p assets/windows
+
+          # Создаем файл лицензии RTF
           echo "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fnil\\fcharset0 Calibri;}}\\viewkind4\\uc1\\pard\\sa200\\sl276\\slmult1\\lang9\\f0\\fs22 Sample License Text\\par }" > LICENSE.rtf
 
-          # Создаем иконку и изображения с помощью magick (новый синтаксис)
+          # Создаем иконку с помощью ImageMagick
           magick -size 256x256 xc:black -fill white -draw "circle 128,128 128,1" assets/windows/icon.ico || echo "Placeholder icon" > assets/windows/icon.ico
+
+          # Создаем изображения для установщика
           magick -size 493x58 xc:gray -fill blue -draw "rectangle 10,10 483,48" assets/windows/banner.bmp
           magick -size 493x312 xc:gray -fill blue -draw "rectangle 10,10 483,302" assets/windows/dialog.bmp
 
@@ -96,21 +109,42 @@ jobs:
           UPGRADE_GUID="$(uuidgen || echo '00000000-0000-0000-0000-000000000000')"
           PRODUCT_GUID="$(uuidgen || echo '11111111-1111-1111-1111-111111111111')"
 
+          # Конфигурация CMake с подробным логированием
           cmake .. -DCMAKE_BUILD_TYPE=Release \
-            -DCPACK_GENERATOR="WIX;ZIP" \
+            -DCPACK_GENERATOR="WIX" \
             -DCPACK_WIX_UPGRADE_GUID="$UPGRADE_GUID" \
             -DCPACK_WIX_PRODUCT_GUID="$PRODUCT_GUID" \
             -DCPACK_WIX_LICENSE_RTF="../LICENSE.rtf" \
             -DCPACK_WIX_PRODUCT_ICON="../assets/windows/icon.ico" \
-            -DCPACK_WIX_UI_BANNER="../assets/windows/banner.bmp" \
-            -DCPACK_WIX_UI_DIALOG="../assets/windows/dialog.bmp" \
+            -DCPACK_WIX_UI_REF="WixUI_Minimal" \
             -DCPACK_WIX_CULTURES="en-US" \
-            -DCPACK_WIX_TEMPLATE="../WixTemplate.wxs"
+            -DCPACK_WIX_TEMPLATE="../WixTemplate.wxs" \
+            -DCPACK_WIX_EXTENSIONS="WixUtilExtension" 2>&1 | tee cmake.log
 
-          cmake --build . --config Release --parallel 2
-          cpack -G WIX -V || cpack -G ZIP
+          # Сборка с подробным выводом
+          cmake --build . --config Release --parallel 2 2>&1 | tee build.log
+
+          # Создание пакета с максимальным логированием
+          cpack -G WIX -V -C Release --debug 2>&1 | tee cpack.log
+
+          # Копирование результатов
           mkdir -p ../artifacts/packages
-          cp *.msi *.zip ../artifacts/packages/ 2>/dev/null || :
+          cp *.msi ../artifacts/packages/ || (echo "MSI creation failed!" && exit 1)
+
+      # Проверка MSI пакета
+      - name: Verify MSI package
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $msi = Get-ChildItem -Path "build\*.msi" -ErrorAction SilentlyContinue
+          if ($msi) {
+            Write-Host "MSI package created successfully at $($msi.FullName)"
+            Write-Host "Package size: $($msi.Length/1KB) KB"
+          } else {
+            Write-Host "##[error] MSI package creation failed!"
+            Get-Content "build\cpack.log" | Select-Object -Last 50
+            exit 1
+          }
 
       # Конфигурация и сборка (Linux/macOS)
       - name: Configure and Build (Linux/macOS)
@@ -175,10 +209,8 @@ jobs:
           if [ "$RUNNER_OS" = "Windows" ]; then
             if ls artifacts/packages/*.msi 1>/dev/null 2>&1; then
               echo "MSI package created successfully"
-            elif ls artifacts/packages/*.zip 1>/dev/null 2>&1; then
-              echo "ZIP package created as fallback"
             else
-              echo "ERROR: No packages created for Windows!"
+              echo "ERROR: MSI package not found!"
               exit 1
             fi
           fi
