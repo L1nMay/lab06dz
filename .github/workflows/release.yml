@@ -14,6 +14,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+      fail-fast: false
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
 
@@ -67,11 +68,19 @@ jobs:
 
           refreshenv
           cmake --version
-          heat.exe -? | Out-Null
-          candle.exe -? | Out-Null
-          light.exe -? | Out-Null
 
-      # Подготовка Windows-specific файлов (улучшенная версия)
+      # Проверка установки WiX
+      - name: Verify WiX installation
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          Write-Host "Checking WiX tools..."
+          heat.exe -?
+          candle.exe -?
+          light.exe -?
+          Write-Host "WiX tools are available"
+
+      # Подготовка Windows-specific файлов
       - name: Prepare Windows files
         if: runner.os == 'Windows'
         shell: bash
@@ -96,29 +105,30 @@ jobs:
             convert -size 493x312 xc:gray -fill blue -draw 'rectangle 10,10 483,302' assets/windows/dialog.bmp || echo "Using placeholder dialog" > assets/windows/dialog.bmp
           fi
 
-      # Сборка проекта (улучшенная версия для Windows)
+      # Сборка проекта
       - name: Configure and Build
         shell: bash
         run: |
           mkdir -p build
           cd build
           if [ "$RUNNER_OS" = "Windows" ]; then
+            # Генерируем GUID если они не заданы
+            [ -z "$UPGRADE_GUID" ] && UPGRADE_GUID="$(uuidgen || echo '00000000-0000-0000-0000-000000000000')"
+            [ -z "$PRODUCT_GUID" ] && PRODUCT_GUID="$(uuidgen || echo '11111111-1111-1111-1111-111111111111')"
+
             cmake .. -DCMAKE_BUILD_TYPE=Release \
               -DCPACK_GENERATOR="ZIP;WIX" \
-              -DCPACK_WIX_UPGRADE_GUID="$(uuidgen || echo '00000000-0000-0000-0000-000000000000')" \
-              -DCPACK_WIX_PRODUCT_GUID="$(uuidgen || echo '11111111-1111-1111-1111-111111111111')" \
+              -DCPACK_WIX_UPGRADE_GUID="$UPGRADE_GUID" \
+              -DCPACK_WIX_PRODUCT_GUID="$PRODUCT_GUID" \
               -DCPACK_WIX_LICENSE_RTF="../LICENSE.rtf" \
               -DCPACK_WIX_PRODUCT_ICON="../assets/windows/icon.ico" \
               -DCPACK_WIX_UI_BANNER="../assets/windows/banner.bmp" \
               -DCPACK_WIX_UI_DIALOG="../assets/windows/dialog.bmp" \
-              -DCPACK_WIX_CULTURES="en-US" \
-              -DCPACK_WIX_TEMPLATE="../WixTemplate.wxs" 2>&1 | tee cmake.log
+              -DCPACK_WIX_CULTURES="en-US"
           else
-            cmake .. -DCMAKE_BUILD_TYPE=Release 2>&1 | tee cmake.log
+            cmake .. -DCMAKE_BUILD_TYPE=Release
           fi
-          cmake --build . --config Release --parallel 2 2>&1 | tee build.log
-          cat cmake.log
-          cat build.log
+          cmake --build . --config Release --parallel 2
 
       # Создание исходников (только для тегов)
       - name: Create source packages
@@ -129,7 +139,7 @@ jobs:
           git archive --format=tar.gz -o artifacts/source/Solver-${{ github.ref_name }}-src.tar.gz HEAD
           git archive --format=zip -o artifacts/source/Solver-${{ github.ref_name }}-src.zip HEAD
 
-      # Создание пакетов (улучшенная версия для Windows)
+      # Создание пакетов (улучшенная версия)
       - name: Create packages
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
@@ -138,11 +148,9 @@ jobs:
           mkdir -p ../artifacts/packages
 
           if [ "$RUNNER_OS" = "Linux" ]; then
-            # Create both DEB and RPM packages
-            cpack -G DEB && cp *.deb ../artifacts/packages/
-            cpack -G RPM && cp *.rpm ../artifacts/packages/
+            cpack -G DEB && cp *.deb ../artifacts/packages/ || echo "DEB package creation failed"
+            cpack -G RPM && cp *.rpm ../artifacts/packages/ || echo "RPM package creation failed"
           elif [ "$RUNNER_OS" = "macOS" ]; then
-            # Create DMG package (fallback to ZIP if DMG fails)
             if command -v create-dmg >/dev/null 2>&1; then
               cpack -G DragNDrop || cpack -G ZIP
             else
@@ -150,30 +158,22 @@ jobs:
             fi
             cp *.dmg *.zip ../artifacts/packages/ 2>/dev/null || :
           elif [ "$RUNNER_OS" = "Windows" ]; then
-            # Сначала проверяем, доступен ли WiX
+            # Пытаемся создать MSI, если WiX доступен
             if command -v light.exe >/dev/null 2>&1; then
-              echo "WiX Toolset is available, attempting to create MSI package..."
-              # Убедимся, что все файлы на месте перед упаковкой
-              find . -name "*.exe" -o -name "*.dll" | xargs -I {} ls -lah {}
-              # Пробуем создать MSI
-              cpack -G WIX -V 2>&1 | tee cpack.log
-              cp *.msi ../artifacts/packages/ 2>/dev/null || :
-              cat cpack.log
-
-              # Если MSI не создался, создаем ZIP
-              if [ ! -f *.msi ]; then
-                echo "MSI creation failed, falling back to ZIP"
-                cpack -G ZIP
-              fi
-            else
-              echo "WiX Toolset not found, creating ZIP package instead"
-              cpack -G ZIP
+              echo "Attempting to create MSI package..."
+              cpack -G WIX -V || echo "MSI creation failed, falling back to ZIP"
             fi
+
+            # В любом случае создаём ZIP
+            cpack -G ZIP
             cp *.msi *.zip ../artifacts/packages/ 2>/dev/null || :
           fi
 
-          # Дополнительная проверка созданных пакетов
-          ls -lah ../artifacts/packages/
+          # Проверяем что хотя бы один пакет создан
+          if [ -z "$(ls ../artifacts/packages/)" ]; then
+            echo "ERROR: No packages were created!"
+            exit 1
+          fi
 
       # Копирование бинарных файлов
       - name: Copy binaries
@@ -189,14 +189,13 @@ jobs:
               ;;
           esac
 
-      # Проверка результатов (улучшенная версия)
+      # Проверка результатов
       - name: Verify artifacts
         shell: bash
         run: |
           echo "Artifacts directory contents:"
           ls -lhR artifacts/
 
-          # Проверяем, что для Windows создался MSI или ZIP
           if [ "$RUNNER_OS" = "Windows" ]; then
             if ls artifacts/packages/*.msi 1>/dev/null 2>&1; then
               echo "MSI package created successfully"
