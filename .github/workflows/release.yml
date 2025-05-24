@@ -70,32 +70,6 @@ jobs:
           convert -size 493x58 xc:gray -fill blue -draw 'rectangle 10,10 483,48' assets/windows/banner.bmp
           convert -size 493x312 xc:gray -fill blue -draw 'rectangle 10,10 483,302' assets/windows/dialog.bmp
 
-          if [ ! -f WixTemplate.wxs ]; then
-            cat > WixTemplate.wxs << 'EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <Product Id="*" Name="Solver" Language="1033" Version="$(var.Version)" Manufacturer="YourCompany" UpgradeCode="$(var.UpgradeCode)">
-    <Package InstallerVersion="200" Compressed="yes" Comments="Windows Installer Package"/>
-    <Media Id="1" Cabinet="product.cab" EmbedCab="yes"/>
-    <Directory Id="TARGETDIR" Name="SourceDir">
-      <Directory Id="ProgramFilesFolder">
-        <Directory Id="INSTALLDIR" Name="Solver">
-          <Component Id="ApplicationFiles" Guid="*">
-            <File Id="ApplicationFile" Source="$(var.Solver.TargetPath)"/>
-          </Component>
-        </Directory>
-      </Directory>
-    </Directory>
-    <Feature Id="DefaultFeature" Level="1">
-      <ComponentRef Id="ApplicationFiles"/>
-    </Feature>
-    <UIRef Id="WixUI_Minimal"/>
-    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLDIR" />
-  </Product>
-</Wix>
-EOF
-          fi
-
       # Конфигурация и сборка (Windows)
       - name: Configure and Build (Windows)
         if: runner.os == 'Windows'
