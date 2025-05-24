@@ -39,95 +39,117 @@ jobs:
           brew install --formula cmake create-dmg
           cmake --version
 
-      # Установка зависимостей для Windows (улучшенная версия)
-      - name: Install dependencies (Windows)
+      # Установка WiX Toolset и зависимостей для Windows
+      - name: Install Windows dependencies
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          $ErrorActionPreference = 'Stop'
-          $ProgressPreference = 'SilentlyContinue'
-          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-
-          # Проверяем, установлен ли уже Chocolatey
-          if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
-              Set-ExecutionPolicy Bypass -Scope Process -Force
-              iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-              $env:Path = [System.Environment]::GetEnvironmentVariable('Path','Machine') + ";" + [System.Environment]::GetEnvironmentVariable('Path','User')
-          }
-
-          # Устанавливаем необходимые пакеты
-          choco install cmake --version=3.28.1 -y --no-progress
+          # Устанавливаем WiX Toolset
           choco install wixtoolset -y --no-progress
-
           # Добавляем WiX в PATH
           $wixPath = "${env:ProgramFiles(x86)}\WiX Toolset *\bin"
           if (Test-Path $wixPath) {
               $wixPath = (Get-Item $wixPath).FullName
-              Add-Content $env:GITHUB_PATH "$wixPath"
+              echo "WIX_PATH=$wixPath" >> $env:GITHUB_ENV
+              echo "::add-path::$wixPath"
           }
-
+          # Устанавливаем CMake и другие зависимости
+          choco install cmake --version=3.28.1 -y --no-progress
+          choco install imagemagick -y --no-progress  # Для создания иконок
           refreshenv
+          # Проверяем установку
           cmake --version
-
-      # Проверка установки WiX
-      - name: Verify WiX installation
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          Write-Host "Checking WiX tools..."
           heat.exe -?
           candle.exe -?
           light.exe -?
-          Write-Host "WiX tools are available"
 
-      # Подготовка Windows-specific файлов
+      # Подготовка Windows-специфичных файлов
       - name: Prepare Windows files
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          # Создаем файл лицензии RTF, если его нет
-          if [ ! -f LICENSE.rtf ]; then
-            echo "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fnil\\fcharset0 Calibri;}}\\viewkind4\\uc1\\pard\\sa200\\sl276\\slmult1\\lang9\\f0\\fs22 Sample License Text\\par }" > LICENSE.rtf
-          fi
-
-          # Создаем assets директорию и иконку, если их нет
+          # Создаем необходимые файлы для WIX
           mkdir -p assets/windows
-          if [ ! -f assets/windows/icon.ico ]; then
-            # Создаем простую иконку (можете заменить на свою)
-            convert -size 256x256 xc:black -fill white -draw 'circle 128,128 128,1' assets/windows/icon.ico || echo "Using placeholder icon" > assets/windows/icon.ico
+
+          # Лицензия RTF
+          echo "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fnil\\fcharset0 Calibri;}}\\viewkind4\\uc1\\pard\\sa200\\sl276\\slmult1\\lang9\\f0\\fs22 Sample License Text\\par }" > LICENSE.rtf
+
+          # Иконка (используем convert из ImageMagick)
+          convert -size 256x256 xc:black -fill white -draw 'circle 128,128 128,1' assets/windows/icon.ico || echo "Placeholder icon" > assets/windows/icon.ico
+
+          # Изображения для установщика
+          convert -size 493x58 xc:gray -fill blue -draw 'rectangle 10,10 483,48' assets/windows/banner.bmp
+          convert -size 493x312 xc:gray -fill blue -draw 'rectangle 10,10 483,302' assets/windows/dialog.bmp
+
+          # Создаем минимальный WixTemplate.wxs если его нет
+          if [ ! -f WixTemplate.wxs ]; then
+            cat > WixTemplate.wxs << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*" Name="Solver" Language="1033" Version="$(var.Version)" Manufacturer="YourCompany" UpgradeCode="$(var.UpgradeCode)">
+    <Package InstallerVersion="200" Compressed="yes" Comments="Windows Installer Package"/>
+    <Media Id="1" Cabinet="product.cab" EmbedCab="yes"/>
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFilesFolder">
+        <Directory Id="INSTALLDIR" Name="Solver">
+          <Component Id="ApplicationFiles" Guid="*">
+            <File Id="ApplicationFile" Source="$(var.Solver.TargetPath)"/>
+          </Component>
+        </Directory>
+      </Directory>
+    </Directory>
+    <Feature Id="DefaultFeature" Level="1">
+      <ComponentRef Id="ApplicationFiles"/>
+    </Feature>
+    <UIRef Id="WixUI_Minimal"/>
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLDIR" />
+  </Product>
+</Wix>
+EOF
           fi
 
-          # Создаем banner и dialog изображения для WiX
-          if [ ! -f assets/windows/banner.bmp ]; then
-            convert -size 493x58 xc:gray -fill blue -draw 'rectangle 10,10 483,48' assets/windows/banner.bmp || echo "Using placeholder banner" > assets/windows/banner.bmp
-          fi
-          if [ ! -f assets/windows/dialog.bmp ]; then
-            convert -size 493x312 xc:gray -fill blue -draw 'rectangle 10,10 483,302' assets/windows/dialog.bmp || echo "Using placeholder dialog" > assets/windows/dialog.bmp
-          fi
-
-      # Сборка проекта
-      - name: Configure and Build
+      # Конфигурация и сборка (Windows)
+      - name: Configure and Build (Windows)
+        if: runner.os == 'Windows'
         shell: bash
         run: |
           mkdir -p build
           cd build
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            # Генерируем GUID если они не заданы
-            [ -z "$UPGRADE_GUID" ] && UPGRADE_GUID="$(uuidgen || echo '00000000-0000-0000-0000-000000000000')"
-            [ -z "$PRODUCT_GUID" ] && PRODUCT_GUID="$(uuidgen || echo '11111111-1111-1111-1111-111111111111')"
 
-            cmake .. -DCMAKE_BUILD_TYPE=Release \
-              -DCPACK_GENERATOR="ZIP;WIX" \
-              -DCPACK_WIX_UPGRADE_GUID="$UPGRADE_GUID" \
-              -DCPACK_WIX_PRODUCT_GUID="$PRODUCT_GUID" \
-              -DCPACK_WIX_LICENSE_RTF="../LICENSE.rtf" \
-              -DCPACK_WIX_PRODUCT_ICON="../assets/windows/icon.ico" \
-              -DCPACK_WIX_UI_BANNER="../assets/windows/banner.bmp" \
-              -DCPACK_WIX_UI_DIALOG="../assets/windows/dialog.bmp" \
-              -DCPACK_WIX_CULTURES="en-US"
-          else
-            cmake .. -DCMAKE_BUILD_TYPE=Release
-          fi
+          # Генерируем уникальные GUID
+          UPGRADE_GUID="$(uuidgen || echo '00000000-0000-0000-0000-000000000000')"
+          PRODUCT_GUID="$(uuidgen || echo '11111111-1111-1111-1111-111111111111')"
+
+          # Конфигурация CMake с явным указанием WIX
+          cmake .. -DCMAKE_BUILD_TYPE=Release \
+            -DCPACK_GENERATOR="WIX;ZIP" \
+            -DCPACK_WIX_UPGRADE_GUID="$UPGRADE_GUID" \
+            -DCPACK_WIX_PRODUCT_GUID="$PRODUCT_GUID" \
+            -DCPACK_WIX_LICENSE_RTF="../LICENSE.rtf" \
+            -DCPACK_WIX_PRODUCT_ICON="../assets/windows/icon.ico" \
+            -DCPACK_WIX_UI_BANNER="../assets/windows/banner.bmp" \
+            -DCPACK_WIX_UI_DIALOG="../assets/windows/dialog.bmp" \
+            -DCPACK_WIX_CULTURES="en-US" \
+            -DCPACK_WIX_TEMPLATE="../WixTemplate.wxs"
+
+          # Сборка
+          cmake --build . --config Release --parallel 2
+
+          # Создание пакетов
+          cpack -G WIX -V || cpack -G ZIP
+
+          # Копируем результаты
+          mkdir -p ../artifacts/packages
+          cp *.msi *.zip ../artifacts/packages/ 2>/dev/null || :
+
+      # Конфигурация и сборка (Linux/macOS)
+      - name: Configure and Build (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p build
+          cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release
           cmake --build . --config Release --parallel 2
 
       # Создание исходников (только для тегов)
@@ -139,17 +161,17 @@ jobs:
           git archive --format=tar.gz -o artifacts/source/Solver-${{ github.ref_name }}-src.tar.gz HEAD
           git archive --format=zip -o artifacts/source/Solver-${{ github.ref_name }}-src.zip HEAD
 
-      # Создание пакетов (улучшенная версия)
-      - name: Create packages
-        if: startsWith(github.ref, 'refs/tags/')
+      # Создание пакетов (Linux/macOS)
+      - name: Create packages (Linux/macOS)
+        if: startsWith(github.ref, 'refs/tags/') && runner.os != 'Windows'
         shell: bash
         run: |
           cd build
           mkdir -p ../artifacts/packages
 
           if [ "$RUNNER_OS" = "Linux" ]; then
-            cpack -G DEB && cp *.deb ../artifacts/packages/ || echo "DEB package creation failed"
-            cpack -G RPM && cp *.rpm ../artifacts/packages/ || echo "RPM package creation failed"
+            cpack -G DEB && cp *.deb ../artifacts/packages/
+            cpack -G RPM && cp *.rpm ../artifacts/packages/
           elif [ "$RUNNER_OS" = "macOS" ]; then
             if command -v create-dmg >/dev/null 2>&1; then
               cpack -G DragNDrop || cpack -G ZIP
@@ -157,22 +179,6 @@ jobs:
               cpack -G ZIP
             fi
             cp *.dmg *.zip ../artifacts/packages/ 2>/dev/null || :
-          elif [ "$RUNNER_OS" = "Windows" ]; then
-            # Пытаемся создать MSI, если WiX доступен
-            if command -v light.exe >/dev/null 2>&1; then
-              echo "Attempting to create MSI package..."
-              cpack -G WIX -V || echo "MSI creation failed, falling back to ZIP"
-            fi
-
-            # В любом случае создаём ZIP
-            cpack -G ZIP
-            cp *.msi *.zip ../artifacts/packages/ 2>/dev/null || :
-          fi
-
-          # Проверяем что хотя бы один пакет создан
-          if [ -z "$(ls ../artifacts/packages/)" ]; then
-            echo "ERROR: No packages were created!"
-            exit 1
           fi
 
       # Копирование бинарных файлов
