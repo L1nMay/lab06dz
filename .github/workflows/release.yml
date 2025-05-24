@@ -5,6 +5,9 @@ on:
     branches: [main]
     tags: ['v*.*.*']
 
+env:
+  ACTIONS_ALLOW_UNSECURE_COMMANDS: 'true'  # Разрешаем устаревшие команды для совместимости
+
 permissions:
   contents: write
   packages: write
@@ -44,16 +47,26 @@ jobs:
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          choco install wixtoolset -y --no-progress
-          $wixPath = "${env:ProgramFiles(x86)}\WiX Toolset *\bin"
+          # Устанавливаем WiX Toolset с принудительным обновлением
+          choco install wixtoolset -y --no-progress --force
+
+          # Добавляем WiX в PATH (современный способ)
+          $wixPath = "${env:ProgramFiles(x86)}\WiX Toolset v3.14\bin"
           if (Test-Path $wixPath) {
-              $wixPath = (Get-Item $wixPath).FullName
-              echo "WIX_PATH=$wixPath" >> $env:GITHUB_ENV
-              echo "::add-path::$wixPath"
+              echo "WIX_PATH=$wixPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+              echo "$wixPath" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           }
-          choco install cmake --version=3.28.1 -y --no-progress
+
+          # Устанавливаем CMake без указания версии (берем последнюю)
+          choco install cmake -y --no-progress
+
+          # Устанавливаем ImageMagick
           choco install imagemagick -y --no-progress
+
+          # Обновляем переменные среды
           refreshenv
+
+          # Проверяем установку
           cmake --version
           heat.exe -?
           candle.exe -?
@@ -78,9 +91,11 @@ jobs:
           mkdir -p build
           cd build
 
+          # Генерируем уникальные GUID
           UPGRADE_GUID="$(uuidgen || echo '00000000-0000-0000-0000-000000000000')"
           PRODUCT_GUID="$(uuidgen || echo '11111111-1111-1111-1111-111111111111')"
 
+          # Конфигурация CMake
           cmake .. -DCMAKE_BUILD_TYPE=Release \
             -DCPACK_GENERATOR="WIX;ZIP" \
             -DCPACK_WIX_UPGRADE_GUID="$UPGRADE_GUID" \
@@ -92,8 +107,13 @@ jobs:
             -DCPACK_WIX_CULTURES="en-US" \
             -DCPACK_WIX_TEMPLATE="../WixTemplate.wxs"
 
+          # Сборка
           cmake --build . --config Release --parallel 2
+
+          # Создание пакетов
           cpack -G WIX -V || cpack -G ZIP
+
+          # Копируем результаты
           mkdir -p ../artifacts/packages
           cp *.msi *.zip ../artifacts/packages/ 2>/dev/null || :
 
