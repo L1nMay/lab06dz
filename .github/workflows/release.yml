@@ -84,7 +84,7 @@ jobs:
           # Создаем минимальный WixTemplate.wxs если его нет
           if [ ! -f WixTemplate.wxs ]; then
             cat > WixTemplate.wxs << 'EOF'
-<?xml version="1.0" encoding="UTF-8"?>
+<xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <Product Id="*" Name="Solver" Language="1033" Version="$(var.Version)" Manufacturer="YourCompany" UpgradeCode="$(var.UpgradeCode)">
     <Package InstallerVersion="200" Compressed="yes" Comments="Windows Installer Package"/>
