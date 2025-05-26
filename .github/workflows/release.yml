@@ -156,9 +156,16 @@ jobs:
           # Создание пакета с максимальным логированием
           cpack -G WIX -V -C Release --debug 2>&1 | tee cpack.log
 
-          # Копирование результатов
+          # Копирование результатов (PowerShell version)
           mkdir -p ../artifacts/packages
-          cp *.msi ../artifacts/packages/ || (echo "MSI creation failed!"; exit 1)
+          $msiFiles = Get-ChildItem -Path "*.msi"
+          if ($msiFiles) {
+              Copy-Item -Path $msiFiles -Destination "../artifacts/packages/"
+          } else {
+              Write-Host "##[error] MSI creation failed!"
+              Get-Content "cpack.log" | Select-Object -Last 50
+              exit 1
+          }
 
       # Проверка MSI пакета
       - name: Verify MSI package
