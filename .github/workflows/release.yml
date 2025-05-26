@@ -128,8 +128,21 @@ jobs:
           $UPGRADE_GUID = [guid]::NewGuid().ToString()
           $PRODUCT_GUID = [guid]::NewGuid().ToString()
 
-          # Конфигурация CMake с подробным логированием
-          cmake .. -DCMAKE_BUILD_TYPE=Release `
+      # Конфигурация и сборка (Windows)
+      - name: Configure and Build (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          # Создаем директории
+          mkdir -p build
+          cd build
+
+          # Генерируем уникальные GUID
+          $UPGRADE_GUID = [guid]::NewGuid().ToString()
+          $PRODUCT_GUID = [guid]::NewGuid().ToString()
+
+          # Конфигурация CMake с обработкой ошибок
+          $cmakeResult = cmake .. -DCMAKE_BUILD_TYPE=Release `
             -DCPACK_GENERATOR="WIX" `
             -DCPACK_WIX_UPGRADE_GUID="$UPGRADE_GUID" `
             -DCPACK_WIX_PRODUCT_GUID="$PRODUCT_GUID" `
@@ -150,19 +163,36 @@ jobs:
             -DCPACK_WIX_UI_BANNER="../assets/windows/banner.bmp" `
             -DCPACK_WIX_UI_DIALOG="../assets/windows/dialog.bmp" 2>&1 | tee cmake.log
 
-          # Сборка с подробным выводом
-          cmake --build . --config Release --parallel 2 2>&1 | tee build.log
+          # Проверяем результат конфигурации
+          if ($LASTEXITCODE -ne 0) {
+              Write-Host "##[error] CMake configuration failed!"
+              Get-Content "cmake.log" | Select-Object -Last 50
+              exit $LASTEXITCODE
+          }
 
-          # Создание пакета с максимальным логированием
-          cpack -G WIX -V -C Release --debug 2>&1 | tee cpack.log
+          # Сборка проекта
+          $buildResult = cmake --build . --config Release --parallel 2 2>&1 | tee build.log
+          if ($LASTEXITCODE -ne 0) {
+              Write-Host "##[error] Build failed!"
+              Get-Content "build.log" | Select-Object -Last 50
+              exit $LASTEXITCODE
+          }
 
-          # Копирование результатов (PowerShell version)
+          # Создание пакета
+          $cpackResult = cpack -G WIX -V -C Release --debug 2>&1 | tee cpack.log
+          if ($LASTEXITCODE -ne 0) {
+              Write-Host "##[warning] CPack finished with warnings (exit code $LASTEXITCODE)"
+              # Продолжаем, даже если есть предупреждения
+          }
+
+          # Копирование результатов
           mkdir -p ../artifacts/packages
-          $msiFiles = Get-ChildItem -Path "*.msi"
+          $msiFiles = Get-ChildItem -Path "*.msi" -ErrorAction SilentlyContinue
           if ($msiFiles) {
-              Copy-Item -Path $msiFiles -Destination "../artifacts/packages/"
+              Copy-Item -Path $msiFiles -Destination "../artifacts/packages/" -Force
+              Write-Host "MSI packages copied successfully"
           } else {
-              Write-Host "##[error] MSI creation failed!"
+              Write-Host "##[error] No MSI files found!"
               Get-Content "cpack.log" | Select-Object -Last 50
               exit 1
           }
