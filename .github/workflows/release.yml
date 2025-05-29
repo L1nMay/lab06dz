@@ -33,6 +33,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake build-essential zip rpm uuid-runtime
           cmake --version
+
       # Установка зависимостей для macOS
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
@@ -40,6 +41,7 @@ jobs:
           brew update
           brew install --formula cmake create-dmg
           cmake --version
+
       # Установка WiX Toolset и зависимостей для Windows
       - name: Install Windows dependencies
         if: runner.os == 'Windows'
@@ -56,16 +58,17 @@ jobs:
           refreshenv
           cmake --version
           magick --version
+
       # Проверка установки WiX
       - name: Verify WiX installation
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          Write-Host "Проверка инструментов WiX:"
-          heat.exe -?
-          candle.exe -?
-          light.exe -?
-          Write-Host "Инструменты WiX доступны"
+          Write-Host "WiX Toolset version:"
+          & "$env:WIX_PATH\candle.exe" -?
+          & "$env:WIX_PATH\light.exe" -?
+          Write-Host "WiX tools are available"
+
       # Проверка содержимого директории (только для Windows)
       - name: List directory contents (Windows)
         if: runner.os == 'Windows'
@@ -73,6 +76,7 @@ jobs:
         run: |
           Write-Host "Содержимое директории перед сборкой:"
           Get-ChildItem -Recurse | Format-Table -AutoSize
+
       # Подготовка Windows-специфичных файлов
       - name: Prepare Windows files
         if: runner.os == 'Windows'
@@ -108,6 +112,7 @@ jobs:
               </Fragment>
           </Wix>
           EOF
+
       # Конфигурация и сборка (Windows)
       - name: Configure and Build (Windows)
         if: runner.os == 'Windows'
@@ -121,7 +126,6 @@ jobs:
           cmake .. `
             -DCMAKE_BUILD_TYPE=Release `
             -DCPACK_GENERATOR="WIX" `
-            -DCPACK_WIX_VERSION="3.11" `
             -DCPACK_WIX_UPGRADE_GUID="$UPGRADE_GUID" `
             -DCPACK_WIX_PRODUCT_GUID="$PRODUCT_GUID" `
             -DCPACK_WIX_ARCHITECTURE="x64" `
@@ -139,10 +143,10 @@ jobs:
             -DCPACK_PACKAGE_INSTALL_DIRECTORY="Solver" `
             -DCPACK_WIX_PROPERTY_ARPCONTACT="contact@example.com" `
             -DCPACK_WIX_UI_BANNER="../assets/windows/banner.bmp" `
-            -DCPACK_WIX_UI_DIALOG="../assets/windows/dialog.bmp" `
-            -DCPACK_WIX_CMAKE_PACKAGE_REGISTRY=ON
+            -DCPACK_WIX_UI_DIALOG="../assets/windows/dialog.bmp"
 
           cmake --build . --config Release --parallel 2
+
       # Создание MSI пакета (Windows)
       - name: Create MSI package (Windows)
         if: runner.os == 'Windows'
@@ -176,6 +180,7 @@ jobs:
           Copy-Item -Path $msiFiles -Destination "../artifacts/packages/" -Force
           Write-Host "Successfully created and copied MSI packages:"
           $msiFiles | Format-Table -AutoSize
+
       # Конфигурация и сборка (Linux/macOS)
       - name: Configure and Build (Linux/macOS)
         if: runner.os != 'Windows'
@@ -185,6 +190,7 @@ jobs:
           cd build
           cmake .. -DCMAKE_BUILD_TYPE=Release
           cmake --build . --config Release --parallel 2
+
       # Создание исходников
       - name: Create source packages
         if: startsWith(github.ref, 'refs/tags/')
@@ -193,6 +199,7 @@ jobs:
           mkdir -p artifacts/source
           git archive --format=tar.gz -o artifacts/source/Solver-${{ github.ref_name }}-src.tar.gz HEAD
           git archive --format=zip -o artifacts/source/Solver-${{ github.ref_name }}-src.zip HEAD
+
       # Создание пакетов (Linux/macOS)
       - name: Create packages (Linux/macOS)
         if: startsWith(github.ref, 'refs/tags/') && runner.os != 'Windows'
@@ -211,6 +218,7 @@ jobs:
             fi
             cp *.dmg *.zip ../artifacts/packages/ 2>/dev/null || :
           fi
+
       # Копирование бинарных файлов
       - name: Copy binaries
         shell: bash
@@ -224,6 +232,7 @@ jobs:
               find build -name "solver.exe" -type f -exec cp {} artifacts/binaries/ \;
               ;;
           esac
+
       # Проверка результатов
       - name: Verify artifacts
         shell: bash
@@ -245,6 +254,7 @@ jobs:
             echo "No artifacts found!"
             exit 1
           fi
+
       # Загрузка артефактов
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
