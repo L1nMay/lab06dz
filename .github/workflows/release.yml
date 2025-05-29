@@ -47,7 +47,6 @@ jobs:
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          choco uninstall wixtoolset -y
           choco install wixtoolset -y --version 3.11.2 --no-progress
           choco install cmake -y --no-progress
           $wixPath = "${env:ProgramFiles(x86)}\WiX Toolset v3.11\bin"
@@ -62,11 +61,19 @@ jobs:
         shell: powershell
         run: |
           Write-Host "WiX Toolset version:"
-          & "$env:WIX_PATH\candle.exe" -?
-          & "$env:WIX_PATH\light.exe" -?
-          Write-Host "WiX tools are available"
+          & "$env:WIX_PATH\candle.exe" -version
+          & "$env:WIX_PATH\light.exe" -version
           Write-Host "WIX_PATH: $env:WIX_PATH"
           Write-Host "PATH: $env:PATH"
+
+      # Подготовка базовых файлов для Windows
+      - name: Prepare Windows files
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p assets/windows
+          echo "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fnil\\fcharset0 Calibri;}}\\viewkind4\\uc1\\pard\\sa200\\sl276\\slmult1\\lang9\\f0\\fs22 Sample License Text\\par }" > LICENSE.rtf
+          echo "Placeholder icon" > assets/windows/icon.ico
 
       # Конфигурация и сборка (Windows)
       - name: Configure and Build (Windows)
@@ -76,66 +83,70 @@ jobs:
           mkdir -p build
           cd build
 
-          # Генерируем только UpgradeGuid (остальное CPack сделает сам)
+          # Генерируем GUID
           $UPGRADE_GUID = [guid]::NewGuid().ToString()
+          $PRODUCT_GUID = [guid]::NewGuid().ToString()
 
           # Минимальная конфигурация для WiX
           cmake .. `
             -DCMAKE_BUILD_TYPE=Release `
             -DCPACK_GENERATOR="WIX" `
             -DCPACK_WIX_UPGRADE_GUID="$UPGRADE_GUID" `
+            -DCPACK_WIX_PRODUCT_GUID="$PRODUCT_GUID" `
             -DCPACK_PACKAGE_NAME="Solver" `
             -DCPACK_PACKAGE_VENDOR="Your Company" `
             -DCPACK_PACKAGE_VERSION="${{ github.ref_name }}" `
             -DCPACK_PACKAGE_DESCRIPTION_SUMMARY="Solver Application" `
+            -DCPACK_RESOURCE_FILE_LICENSE="../LICENSE.rtf" `
             -DCPACK_WIX_PRODUCT_ICON="../assets/windows/icon.ico" `
-            -DCPACK_WIX_UI_REF="WixUI_Minimal"
+            -DCPACK_WIX_UI_REF="WixUI_Minimal" `
+            -DCPACK_WIX_CULTURES="en-US" `
+            -DCPACK_WIX_ARCHITECTURE="x64"
 
           cmake --build . --config Release --parallel 2
 
       # Создание MSI пакета (Windows)
-- name: Create MSI package (Windows)
-  if: runner.os == 'Windows'
-  shell: powershell
-  run: |
-    cd build
+      - name: Create MSI package (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          cd build
 
-    # Явно устанавливаем переменные окружения для WiX
-    $env:WIX = "C:\Program Files (x86)\WiX Toolset v3.11"
-    $env:PATH = "$env:WIX\bin;$env:PATH"
+          # Явно устанавливаем переменные окружения для WiX
+          $env:WIX = "C:\Program Files (x86)\WiX Toolset v3.11"
+          $env:PATH = "$env:WIX\bin;$env:PATH"
 
-    Write-Host "Starting CPack with full diagnostics..."
+          Write-Host "Starting CPack..."
 
-    # Сначала очистим предыдущие попытки упаковки
-    Remove-Item -Path "_CPack_Packages" -Recurse -Force -ErrorAction SilentlyContinue
+          # Сначала пробуем простой вызов CPack
+          cpack -G WIX -C Release --verbose
 
-    # Запускаем CPack с максимальным уровнем логирования
-    cpack -G WIX -C Release --verbose --debug 2>&1 | Tee-Object -FilePath "cpack.log"
+          # Если не сработало, пробуем с явным указанием архитектуры
+          if (-not (Test-Path "*.msi")) {
+              Write-Host "Trying with explicit architecture..."
+              cpack -G WIX -C Release -D CPACK_WIX_ARCHITECTURE=x64 --verbose
+          }
 
-    # Проверяем лог WiX
-    $wixLogPath = "$pwd/_CPack_Packages/win64/WIX/wix.log"
-    if (Test-Path $wixLogPath) {
-        Write-Host "WiX log contents:"
-        Get-Content $wixLogPath
-    } else {
-        Write-Host "##[warning] WiX log file not found at $wixLogPath"
-    }
+          # Проверяем результат
+          $msiFiles = Get-ChildItem -Path "*.msi" -ErrorAction SilentlyContinue
 
-    # Проверяем все возможные места для MSI
-    $msiFiles = @(Get-ChildItem -Path "*.msi" -Recurse -ErrorAction SilentlyContinue)
+          if (-not $msiFiles) {
+              Write-Host "##[error] No MSI files found!"
+              Write-Host "Checking WiX log files..."
+              $wixLogPath = "$pwd/_CPack_Packages/win64/WIX/wix.log"
+              if (Test-Path $wixLogPath) {
+                  Write-Host "WiX log contents:"
+                  Get-Content $wixLogPath
+              }
 
-    if ($msiFiles.Count -eq 0) {
-        Write-Host "##[error] No MSI files found!"
-        Write-Host "Last 50 lines of CPack output:"
-        Get-Content "cpack.log" -Tail 50
-        Write-Host "Directory contents:"
-        Get-ChildItem -Recurse | Format-Table -AutoSize
-        exit 1
-    }
+              Write-Host "Directory contents:"
+              Get-ChildItem -Recurse | Format-Table -AutoSize
+              exit 1
+          }
 
-    mkdir -p ../artifacts/packages
-    Copy-Item -Path $msiFiles -Destination "../artifacts/packages/" -Force
-    Write-Host "Successfully created MSI package: $($msiFiles.FullName)"
+          mkdir -p ../artifacts/packages
+          Copy-Item -Path $msiFiles -Destination "../artifacts/packages/" -Force
+          Write-Host "Successfully created MSI package: $($msiFiles.FullName)"
 
       # Конфигурация и сборка (Linux/macOS)
       - name: Configure and Build (Linux/macOS)
