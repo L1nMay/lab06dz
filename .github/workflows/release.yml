@@ -127,10 +127,10 @@ jobs:
           $UPGRADE_GUID = [guid]::NewGuid().ToString()
           $PRODUCT_GUID = [guid]::NewGuid().ToString()
 
-          # Конфигурация CMake с подробным логированием
-          $ErrorActionPreference = "Continue"
-          Write-Host "Начинаем конфигурацию CMake с подробным выводом..."
-          $cmakeOutput = cmake .. --debug-output --trace-expand -DCMAKE_BUILD_TYPE=Release `
+          # Конфигурация CMake
+          Write-Host "Starting CMake configuration..."
+          cmake .. --debug-output --trace-expand `
+            -DCMAKE_BUILD_TYPE=Release `
             -DCPACK_GENERATOR="WIX" `
             -DCPACK_WIX_UPGRADE_GUID="$UPGRADE_GUID" `
             -DCPACK_WIX_PRODUCT_GUID="$PRODUCT_GUID" `
@@ -149,53 +149,53 @@ jobs:
             -DCPACK_WIX_PROPERTY_ARPCONTACT="contact@example.com" `
             -DCPACK_WIX_PRODUCT_ICON="../assets/windows/icon.ico" `
             -DCPACK_WIX_UI_BANNER="../assets/windows/banner.bmp" `
-            -DCPACK_WIX_UI_DIALOG="../assets/windows/dialog.bmp" 2>&1 | Tee-Object -FilePath "cmake.log"
+            -DCPACK_WIX_UI_DIALOG="../assets/windows/dialog.bmp" | Out-File -FilePath "cmake.log" -Encoding utf8
 
-          # Проверяем результат конфигурации
           if ($LASTEXITCODE -ne 0) {
-              Write-Host "##[error] CMake configuration failed with exit code $LASTEXITCODE"
-              Write-Host "Последние 100 строк вывода CMake:"
-              $cmakeOutput | Select-Object -Last 100
-              Write-Host "Последние 100 строк лога:"
-              Get-Content "cmake.log" | Select-Object -Last 100
+              Write-Host "##[error] CMake configuration failed"
+              Write-Host "Last 50 lines of CMake output:"
+              Get-Content "cmake.log" -Tail 50
               exit $LASTEXITCODE
           }
+          Write-Host "CMake configuration completed successfully"
 
-          Write-Host "Конфигурация CMake завершена успешно"
+      - name: Build project (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          cd build
+          Write-Host "Starting build process..."
+          cmake --build . --config Release --parallel 2 | Out-File -FilePath "build.log" -Encoding utf8 -Append
 
-          # Сборка проекта
-          Write-Host "Начинаем сборку проекта..."
-          $buildOutput = cmake --build . --config Release --parallel 2 2>&1 | Tee-Object -FilePath "build.log"
           if ($LASTEXITCODE -ne 0) {
-              Write-Host "##[error] Build failed with exit code $LASTEXITCODE"
-              Write-Host "Последние 100 строк вывода сборки:"
-              $buildOutput | Select-Object -Last 100
-              Write-Host "Последние 100 строк лога сборки:"
-              Get-Content "build.log" | Select-Object -Last 100
+              Write-Host "##[error] Build failed"
+              Write-Host "Last 50 lines of build output:"
+              Get-Content "build.log" -Tail 50
               exit $LASTEXITCODE
           }
+          Write-Host "Build completed successfully"
 
-          Write-Host "Сборка проекта завершена успешно"
+      - name: Create MSI package (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          cd build
+          Write-Host "Starting CPack..."
+          cpack -G WIX -V -C Release --debug | Out-File -FilePath "cpack.log" -Encoding utf8 -Append
 
-          # Создание пакета
-          Write-Host "Начинаем создание MSI пакета..."
-          $cpackOutput = cpack -G WIX -V -C Release --debug 2>&1 | Tee-Object -FilePath "cpack.log"
-
-          # Проверяем наличие MSI-файлов
           mkdir -p ../artifacts/packages
           $msiFiles = Get-ChildItem -Path "*.msi" -ErrorAction SilentlyContinue
-          if ($msiFiles) {
-              Copy-Item -Path $msiFiles -Destination "../artifacts/packages/" -Force
-              Write-Host "MSI пакеты успешно созданы и скопированы:"
-              $msiFiles | Format-Table -AutoSize
-          } else {
-              Write-Host "##[error] No MSI files found after CPack!"
-              Write-Host "Последние 100 строк вывода CPack:"
-              $cpackOutput | Select-Object -Last 100
-              Write-Host "Последние 100 строк лога CPack:"
-              Get-Content "cpack.log" | Select-Object -Last 100
+
+          if (-not $msiFiles) {
+              Write-Host "##[error] No MSI files found!"
+              Write-Host "Last 50 lines of CPack output:"
+              Get-Content "cpack.log" -Tail 50
               exit 1
           }
+
+          Copy-Item -Path $msiFiles -Destination "../artifacts/packages/" -Force
+          Write-Host "Successfully created and copied MSI packages:"
+          $msiFiles | Format-Table -AutoSize
 
       # Конфигурация и сборка (Linux/macOS)
       - name: Configure and Build (Linux/macOS)
