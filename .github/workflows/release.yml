@@ -94,32 +94,48 @@ jobs:
           cmake --build . --config Release --parallel 2
 
       # Создание MSI пакета (Windows)
-      - name: Create MSI package (Windows)
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          cd build
+- name: Create MSI package (Windows)
+  if: runner.os == 'Windows'
+  shell: powershell
+  run: |
+    cd build
 
-          # Явно устанавливаем переменные окружения для WiX
-          $env:WIX = "C:\Program Files (x86)\WiX Toolset v3.11"
-          $env:PATH = "$env:WIX\bin;$env:PATH"
+    # Явно устанавливаем переменные окружения для WiX
+    $env:WIX = "C:\Program Files (x86)\WiX Toolset v3.11"
+    $env:PATH = "$env:WIX\bin;$env:PATH"
 
-          Write-Host "Starting CPack..."
-          cpack -G WIX -C Release --verbose
+    Write-Host "Starting CPack with full diagnostics..."
 
-          # Проверяем результат
-          $msiFiles = Get-ChildItem -Path "*.msi" -ErrorAction SilentlyContinue
+    # Сначала очистим предыдущие попытки упаковки
+    Remove-Item -Path "_CPack_Packages" -Recurse -Force -ErrorAction SilentlyContinue
 
-          if (-not $msiFiles) {
-              Write-Host "##[error] No MSI files found!"
-              Write-Host "Directory contents:"
-              Get-ChildItem -Recurse | Format-Table -AutoSize
-              exit 1
-          }
+    # Запускаем CPack с максимальным уровнем логирования
+    cpack -G WIX -C Release --verbose --debug 2>&1 | Tee-Object -FilePath "cpack.log"
 
-          mkdir -p ../artifacts/packages
-          Copy-Item -Path $msiFiles -Destination "../artifacts/packages/" -Force
-          Write-Host "Successfully created MSI package: $($msiFiles.FullName)"
+    # Проверяем лог WiX
+    $wixLogPath = "$pwd/_CPack_Packages/win64/WIX/wix.log"
+    if (Test-Path $wixLogPath) {
+        Write-Host "WiX log contents:"
+        Get-Content $wixLogPath
+    } else {
+        Write-Host "##[warning] WiX log file not found at $wixLogPath"
+    }
+
+    # Проверяем все возможные места для MSI
+    $msiFiles = @(Get-ChildItem -Path "*.msi" -Recurse -ErrorAction SilentlyContinue)
+
+    if ($msiFiles.Count -eq 0) {
+        Write-Host "##[error] No MSI files found!"
+        Write-Host "Last 50 lines of CPack output:"
+        Get-Content "cpack.log" -Tail 50
+        Write-Host "Directory contents:"
+        Get-ChildItem -Recurse | Format-Table -AutoSize
+        exit 1
+    }
+
+    mkdir -p ../artifacts/packages
+    Copy-Item -Path $msiFiles -Destination "../artifacts/packages/" -Force
+    Write-Host "Successfully created MSI package: $($msiFiles.FullName)"
 
       # Конфигурация и сборка (Linux/macOS)
       - name: Configure and Build (Linux/macOS)
