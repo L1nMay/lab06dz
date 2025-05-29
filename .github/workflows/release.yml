@@ -33,7 +33,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake build-essential zip rpm uuid-runtime
           cmake --version
-
       # Установка зависимостей для macOS
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
@@ -41,7 +40,6 @@ jobs:
           brew update
           brew install --formula cmake create-dmg
           cmake --version
-
       # Установка WiX Toolset и зависимостей для Windows
       - name: Install Windows dependencies
         if: runner.os == 'Windows'
@@ -58,7 +56,6 @@ jobs:
           refreshenv
           cmake --version
           magick --version
-
       # Проверка установки WiX
       - name: Verify WiX installation
         if: runner.os == 'Windows'
@@ -69,7 +66,6 @@ jobs:
           candle.exe -?
           light.exe -?
           Write-Host "Инструменты WiX доступны"
-
       # Проверка содержимого директории (только для Windows)
       - name: List directory contents (Windows)
         if: runner.os == 'Windows'
@@ -77,7 +73,6 @@ jobs:
         run: |
           Write-Host "Содержимое директории перед сборкой:"
           Get-ChildItem -Recurse | Format-Table -AutoSize
-
       # Подготовка Windows-специфичных файлов
       - name: Prepare Windows files
         if: runner.os == 'Windows'
@@ -113,27 +108,23 @@ jobs:
               </Fragment>
           </Wix>
           EOF
-
       # Конфигурация и сборка (Windows)
       - name: Configure and Build (Windows)
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          # Создаем директории
           mkdir -p build
           cd build
-
-          # Генерируем уникальные GUID
           $UPGRADE_GUID = [guid]::NewGuid().ToString()
           $PRODUCT_GUID = [guid]::NewGuid().ToString()
 
-          # Конфигурация CMake
-          Write-Host "Starting CMake configuration..."
-          cmake .. --debug-output --trace-expand `
+          cmake .. `
             -DCMAKE_BUILD_TYPE=Release `
             -DCPACK_GENERATOR="WIX" `
+            -DCPACK_WIX_VERSION="3.11" `
             -DCPACK_WIX_UPGRADE_GUID="$UPGRADE_GUID" `
             -DCPACK_WIX_PRODUCT_GUID="$PRODUCT_GUID" `
+            -DCPACK_WIX_ARCHITECTURE="x64" `
             -DCPACK_WIX_LICENSE_RTF="../LICENSE.rtf" `
             -DCPACK_WIX_PRODUCT_ICON="../assets/windows/icon.ico" `
             -DCPACK_WIX_UI_REF="WixUI_Minimal" `
@@ -147,41 +138,30 @@ jobs:
             -DCPACK_RESOURCE_FILE_LICENSE="../LICENSE.rtf" `
             -DCPACK_PACKAGE_INSTALL_DIRECTORY="Solver" `
             -DCPACK_WIX_PROPERTY_ARPCONTACT="contact@example.com" `
-            -DCPACK_WIX_PRODUCT_ICON="../assets/windows/icon.ico" `
             -DCPACK_WIX_UI_BANNER="../assets/windows/banner.bmp" `
-            -DCPACK_WIX_UI_DIALOG="../assets/windows/dialog.bmp" | Out-File -FilePath "cmake.log" -Encoding utf8
+            -DCPACK_WIX_UI_DIALOG="../assets/windows/dialog.bmp" `
+            -DCPACK_WIX_CMAKE_PACKAGE_REGISTRY=ON
 
-          if ($LASTEXITCODE -ne 0) {
-              Write-Host "##[error] CMake configuration failed"
-              Write-Host "Last 50 lines of CMake output:"
-              Get-Content "cmake.log" -Tail 50
-              exit $LASTEXITCODE
-          }
-          Write-Host "CMake configuration completed successfully"
-
-      - name: Build project (Windows)
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          cd build
-          Write-Host "Starting build process..."
-          cmake --build . --config Release --parallel 2 | Out-File -FilePath "build.log" -Encoding utf8 -Append
-
-          if ($LASTEXITCODE -ne 0) {
-              Write-Host "##[error] Build failed"
-              Write-Host "Last 50 lines of build output:"
-              Get-Content "build.log" -Tail 50
-              exit $LASTEXITCODE
-          }
-          Write-Host "Build completed successfully"
-
+          cmake --build . --config Release --parallel 2
+      # Создание MSI пакета (Windows)
       - name: Create MSI package (Windows)
         if: runner.os == 'Windows'
         shell: powershell
         run: |
           cd build
-          Write-Host "Starting CPack..."
-          cpack -G WIX -V -C Release --debug | Out-File -FilePath "cpack.log" -Encoding utf8 -Append
+          Write-Host "Starting CPack with detailed logging..."
+
+          $env:CPACK_WIX_UPGRADE_GUID = "$UPGRADE_GUID"
+          $env:CPACK_WIX_PRODUCT_GUID = "$PRODUCT_GUID"
+          $env:CPACK_WIX_ARCHITECTURE = "x64"
+
+          cpack -G WIX -C Release --verbose --debug 2>&1 | Tee-Object -FilePath "cpack.log"
+
+          $wixLogPath = "$pwd/_CPack_Packages/win64/WIX/wix.log"
+          if (Test-Path $wixLogPath) {
+              Write-Host "WiX log file contents:"
+              Get-Content $wixLogPath
+          }
 
           mkdir -p ../artifacts/packages
           $msiFiles = Get-ChildItem -Path "*.msi" -ErrorAction SilentlyContinue
@@ -196,7 +176,6 @@ jobs:
           Copy-Item -Path $msiFiles -Destination "../artifacts/packages/" -Force
           Write-Host "Successfully created and copied MSI packages:"
           $msiFiles | Format-Table -AutoSize
-
       # Конфигурация и сборка (Linux/macOS)
       - name: Configure and Build (Linux/macOS)
         if: runner.os != 'Windows'
@@ -206,7 +185,6 @@ jobs:
           cd build
           cmake .. -DCMAKE_BUILD_TYPE=Release
           cmake --build . --config Release --parallel 2
-
       # Создание исходников
       - name: Create source packages
         if: startsWith(github.ref, 'refs/tags/')
@@ -215,7 +193,6 @@ jobs:
           mkdir -p artifacts/source
           git archive --format=tar.gz -o artifacts/source/Solver-${{ github.ref_name }}-src.tar.gz HEAD
           git archive --format=zip -o artifacts/source/Solver-${{ github.ref_name }}-src.zip HEAD
-
       # Создание пакетов (Linux/macOS)
       - name: Create packages (Linux/macOS)
         if: startsWith(github.ref, 'refs/tags/') && runner.os != 'Windows'
@@ -234,7 +211,6 @@ jobs:
             fi
             cp *.dmg *.zip ../artifacts/packages/ 2>/dev/null || :
           fi
-
       # Копирование бинарных файлов
       - name: Copy binaries
         shell: bash
@@ -248,7 +224,6 @@ jobs:
               find build -name "solver.exe" -type f -exec cp {} artifacts/binaries/ \;
               ;;
           esac
-
       # Проверка результатов
       - name: Verify artifacts
         shell: bash
@@ -270,7 +245,6 @@ jobs:
             echo "No artifacts found!"
             exit 1
           fi
-
       # Загрузка артефактов
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
