@@ -1,14 +1,27 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <Product Id="*" Name="$(var.PackageName)" Version="$(var.PackageVersion)" 
-           Manufacturer="$(var.PackageVendor)" Language="1033">
-    <Package InstallerVersion="200" Compressed="yes" Comments="$(var.PackageComments)"
-             InstallScope="perMachine"/>
+  <Product Id="*" 
+           Name="$(var.PackageName)" 
+           Version="$(var.PackageVersion)"
+           Manufacturer="$(var.PackageVendor)" 
+           Language="1033"
+           UpgradeCode="$(var.UpgradeCode)">
+    
+    <Package InstallerVersion="200" 
+             Compressed="yes" 
+             InstallScope="perMachine"
+             Comments="$(var.PackageComments)"/>
     
     <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
     <MediaTemplate EmbedCab="yes" />
     
-    <Feature Id="ProductFeature" Title="$(var.PackageName)" Level="1">
+    <Icon Id="icon.ico" SourceFile="$(var.ProductIcon)"/>
+    <Property Id="ARPPRODUCTICON" Value="icon.ico" />
+    
+    <UIRef Id="WixUI_Minimal" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseFile)" />
+    
+    <Feature Id="ProductFeature" Title="Main Feature" Level="1">
       <ComponentGroupRef Id="ProductComponents" />
     </Feature>
     
@@ -31,11 +44,7 @@
   
   <Fragment>
     <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
-      <!-- Files will be added automatically by CPack -->
+      <!-- Файлы будут добавлены автоматически -->
     </ComponentGroup>
-  </Fragment>
-  
-  <Fragment>
-    <Icon Id="ProductIcon" SourceFile="$(var.PackageIcon)"/>
   </Fragment>
 </Wix>
