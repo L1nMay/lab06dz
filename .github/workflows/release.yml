@@ -26,149 +26,55 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Общие настройки для всех ОС
+      - name: Setup environment
+        shell: bash
+        run: |
+          mkdir -p artifacts/packages
+          mkdir -p artifacts/binaries
+
       # Установка зависимостей для Windows
       - name: Install Windows dependencies
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          # Устанавливаем WiX Toolset и CMake
           choco install wixtoolset -y --no-progress
           choco install cmake -y --no-progress
-
-          # Находим путь к WiX (поддерживаем обе версии)
-          $wixPath = if (Test-Path "${env:ProgramFiles(x86)}\WiX Toolset v3.14\bin") {
-              "${env:ProgramFiles(x86)}\WiX Toolset v3.14\bin"
-          } else {
-              "${env:ProgramFiles(x86)}\WiX Toolset v3.11\bin"
-          }
-
+          $wixPath = "${env:ProgramFiles(x86)}\WiX Toolset v3.14\bin"
           echo "WIX_PATH=$wixPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           echo "$wixPath" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           refreshenv
           cmake --version
 
-      # Подготовка файлов для WiX
+      # Установка зависимостей для Linux
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential zip rpm uuid-runtime
+          cmake --version
+
+      # Установка зависимостей для macOS
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          brew update
+          brew install cmake create-dmg
+          cmake --version
+
+      # Подготовка файлов для WiX (только Windows)
       - name: Prepare WiX files
         if: runner.os == 'Windows'
         shell: bash
         run: |
           mkdir -p assets/windows
-
-          # Создаем минимальный файл лицензии в RTF формате
           echo "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fnil\\fcharset0 Calibri;}}\\viewkind4\\uc1\\pard\\sa200\\sl276\\slmult1\\lang9\\f0\\fs22 Sample License Text\\par }" > LICENSE.rtf
-
-          # Создаем простую иконку (заглушку)
           echo "Placeholder icon" > assets/windows/icon.ico
 
-          # Создаем корректный WXS шаблон
-          cat << 'EOF' > WixTemplate.wxs
-          <?xml version="1.0" encoding="UTF-8"?>
-          <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-              <Product Id="*" Name="$(var.ProductName)" Language="1033" Version="$(var.ProductVersion)" 
-                      Manufacturer="$(var.ProductManufacturer)" UpgradeCode="$(var.UpgradeCode)">
-                  <Package InstallerVersion="200" Compressed="yes" InstallScope="perMachine" />
-                  <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
-                  <MediaTemplate EmbedCab="yes" />
-
-                  <UIRef Id="WixUI_Minimal" />
-                  <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseFile)" />
-                  <WixVariable Id="WixUIBannerBmp" Value="$(var.BannerImage)" />
-
-                  <Feature Id="MainFeature" Title="Main Feature" Level="1">
-                      <ComponentGroupRef Id="ProductComponents" />
-                  </Feature>
-              </Product>
-
-              <Fragment>
-                  <Directory Id="TARGETDIR" Name="SourceDir">
-                      <Directory Id="ProgramFilesFolder">
-                          <Directory Id="INSTALLFOLDER" Name="$(var.ProductName)" />
-                      </Directory>
-                  </Directory>
-              </Fragment>
-
-              <Fragment>
-                  <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
-                      <!-- Файлы будут добавлены автоматически -->
-                  </ComponentGroup>
-              </Fragment>
-          </Wix>
-          EOF
-
-      # Конфигурация и сборка (Windows)
-      - name: Configure and Build (Windows)
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          mkdir -p build
-          cd build
-
-          # Генерируем GUID в правильном формате
-          $UPGRADE_GUID = [guid]::NewGuid().ToString().ToUpper()
-          $PRODUCT_GUID = [guid]::NewGuid().ToString().ToUpper()
-
-          Write-Host "Using UpgradeCode: $UPGRADE_GUID"
-          Write-Host "Using ProductCode: $PRODUCT_GUID"
-
-          # Конфигурация CMake с явным указанием всех параметров
-          cmake .. `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DCPACK_GENERATOR="WIX" `
-            -DCPACK_WIX_UPGRADE_GUID="$UPGRADE_GUID" `
-            -DCPACK_WIX_PRODUCT_GUID="$PRODUCT_GUID" `
-            -DCPACK_PACKAGE_NAME="Solver" `
-            -DCPACK_PACKAGE_VENDOR="Your Company" `
-            -DCPACK_PACKAGE_VERSION="${{ github.ref_name }}" `
-            -DCPACK_PACKAGE_DESCRIPTION_SUMMARY="Solver Application" `
-            -DCPACK_RESOURCE_FILE_LICENSE="../LICENSE.rtf" `
-            -DCPACK_WIX_PRODUCT_ICON="../assets/windows/icon.ico" `
-            -DCPACK_WIX_UI_REF="WixUI_Minimal" `
-            -DCPACK_WIX_CULTURES="en-US" `
-            -DCPACK_WIX_ARCHITECTURE="x64" `
-            -DCPACK_WIX_TEMPLATE="../WixTemplate.wxs" `
-            -DCPACK_WIX_EXTRA_EXTENSIONS="WixUtilExtension"
-
-          # Сборка проекта
-          cmake --build . --config Release --parallel 2
-
-      # Создание MSI пакета (Windows)
-      - name: Create MSI package (Windows)
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          cd build
-
-          # Убедимся, что WiX в PATH
-          $env:PATH = "$env:WIX_PATH;$env:PATH"
-
-          Write-Host "Starting CPack with WiX from: $env:WIX_PATH"
-
-          # Запускаем CPack с подробным логированием
-          cpack -G WIX -C Release --verbose 2>&1 | Tee-Object -FilePath "cpack.log"
-
-          # Проверяем результат
-          $msiFiles = Get-ChildItem -Path "*.msi" -ErrorAction SilentlyContinue
-
-          if (-not $msiFiles) {
-              Write-Host "##[error] MSI creation failed!"
-              Write-Host "CPack output:"
-              Get-Content "cpack.log" -Tail 50
-
-              $wixLogPath = "$pwd/_CPack_Packages/win64/WIX/wix.log"
-              if (Test-Path $wixLogPath) {
-                  Write-Host "WiX log contents:"
-                  Get-Content $wixLogPath
-              }
-              exit 1
-          }
-
-          mkdir -p ../artifacts/packages
-          Copy-Item -Path $msiFiles -Destination "../artifacts/packages/" -Force
-          Write-Host "Successfully created MSI: $($msiFiles.FullName)"
-
-      # Шаги для Linux и macOS (остаются без изменений)
-      - name: Configure and Build (Linux/macOS)
-        if: runner.os != 'Windows'
+      # Конфигурация и сборка для всех ОС
+      - name: Configure and Build
         shell: bash
         run: |
           mkdir -p build
@@ -176,17 +82,74 @@ jobs:
           cmake .. -DCMAKE_BUILD_TYPE=Release
           cmake --build . --config Release --parallel 2
 
-      - name: Create packages (Linux/macOS)
-        if: startsWith(github.ref, 'refs/tags/') && runner.os != 'Windows'
+      # Копирование бинарных файлов
+      - name: Copy binaries
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Linux|macOS)
+              find build -name "solver" -type f -exec cp {} artifacts/binaries/ \;
+              ;;
+            Windows)
+              find build -name "solver.exe" -type f -exec cp {} artifacts/binaries/ \;
+              ;;
+          esac
+
+      # Создание пакетов для Windows (MSI)
+      - name: Create Windows package
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          cd build
+
+          # Генерируем GUID
+          $UPGRADE_GUID = [guid]::NewGuid().ToString().ToUpper()
+          $PRODUCT_GUID = [guid]::NewGuid().ToString().ToUpper()
+
+          # Переконфигурируем с параметрами WiX
+          cmake .. `
+            -DCPACK_GENERATOR="WIX" `
+            -DCPACK_WIX_UPGRADE_GUID="$UPGRADE_GUID" `
+            -DCPACK_WIX_PRODUCT_GUID="$PRODUCT_GUID" `
+            -DCPACK_PACKAGE_NAME="Solver" `
+            -DCPACK_PACKAGE_VERSION="${{ github.ref_name }}" `
+            -DCPACK_WIX_ARCHITECTURE="x64"
+
+          # Создаем MSI пакет
+          $env:PATH = "$env:WIX_PATH;$env:PATH"
+          cpack -G WIX -C Release --verbose
+
+          # Копируем MSI в артефакты
+          Copy-Item -Path "*.msi" -Destination "../artifacts/packages/" -Force
+
+      # Создание пакетов для Linux
+      - name: Create Linux packages
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           cd build
-          mkdir -p ../artifacts/packages
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            cpack -G DEB && cp *.deb ../artifacts/packages/
-            cpack -G RPM && cp *.rpm ../artifacts/packages/
-          elif [ "$RUNNER_OS" = "macOS" ]; then
-            cpack -G ZIP && cp *.zip ../artifacts/packages/
+          cpack -G DEB
+          cpack -G RPM
+          cp *.deb *.rpm ../artifacts/packages/
+
+      # Создание пакетов для macOS
+      - name: Create macOS packages
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          cd build
+          cpack -G ZIP
+          cp *.zip ../artifacts/packages/
+
+      # Проверка артефактов
+      - name: Verify artifacts
+        shell: bash
+        run: |
+          echo "Artifacts contents:"
+          ls -lhR artifacts/
+          if [ -z "$(ls -A artifacts/packages/ 2>/dev/null)" ]; then
+            echo "##[error] No packages created!"
+            exit 1
           fi
 
       # Загрузка артефактов
@@ -198,7 +161,7 @@ jobs:
             artifacts/*
           retention-days: 7
 
-      # Создание релиза
+      # Создание релиза (только для тегов)
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
@@ -209,5 +172,6 @@ jobs:
           name: Solver ${{ github.ref_name }}
           files: |
             artifacts/packages/*
+            artifacts/binaries/*
           draft: false
           prerelease: false
