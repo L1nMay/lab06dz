@@ -123,7 +123,9 @@ jobs:
             -DCPACK_WIX_PRODUCT_ICON="../assets/windows/icon.ico" `
             -DCPACK_WIX_UI_REF="WixUI_Minimal" `
             -DCPACK_WIX_ARCHITECTURE="x64" `
-            -DCPACK_WIX_EXTENSIONS="WixUtilExtension"
+            -DCPACK_WIX_EXTENSIONS="WixUtilExtension" `
+            -DCPACK_PACKAGE_EXECUTABLES="solver;solver" `
+            -DCPACK_CREATE_DESKTOP_LINKS="solver"
 
           # Создание MSI с обработкой ошибок
           $env:PATH = "$env:WIX_PATH;$env:PATH"
@@ -144,8 +146,8 @@ jobs:
         shell: bash
         run: |
           cd build
-          cpack -G DEB && cp *.deb ../artifacts/packages/ || echo "DEB package failed"
-          cpack -G RPM && cp *.rpm ../artifacts/packages/ || echo "RPM package failed"
+          cpack -G DEB -C Release && cp *.deb ../artifacts/packages/ || echo "DEB package failed"
+          cpack -G RPM -C Release && cp *.rpm ../artifacts/packages/ || echo "RPM package failed"
 
       # Создание пакетов для macOS
       - name: Create macOS packages
@@ -153,7 +155,8 @@ jobs:
         shell: bash
         run: |
           cd build
-          cpack -G ZIP && cp *.zip ../artifacts/packages/ || echo "ZIP package failed"
+          cpack -G ZIP -C Release && cp *.zip ../artifacts/packages/ || echo "ZIP package failed"
+          cpack -G DragNDrop -C Release && cp *.dmg ../artifacts/packages/ || echo "DMG package failed"
 
       # Проверка артефактов
       - name: Verify artifacts
