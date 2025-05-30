@@ -148,75 +148,82 @@ jobs:
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          # Проверяем установку WiX
-          Write-Host "Checking WiX installation..."
-          where candle
-          where light
+# Проверяем установку WiX
+Write-Host "Checking WiX installation..."
+where candle
+where light
 
-          cd build
+cd build
 
-          # Генерируем GUID (UPGRADE_GUID должен быть постоянным)
-          $UPGRADE_GUID = "5B5F3D7B-0F6E-4EAF-B6D1-2C9D3E4F5A6B"
-          $PRODUCT_GUID = [guid]::NewGuid().ToString().ToUpper()
+# Генерируем GUID (UPGRADE_GUID должен быть постоянным)
+$UPGRADE_GUID = "5B5F3D7B-0F6E-4EAF-B6D1-2C9D3E4F5A6B"
+$PRODUCT_GUID = [guid]::NewGuid().ToString().ToUpper()
 
-          # Проверяем и создаем необходимые файлы
-          if (-not (Test-Path "../LICENSE.rtf")) {
-              echo "{\rtf1\ansi\deff0{\fonttbl{\f0\fnil\fcharset0 Calibri;}}\viewkind4\uc1\pard\sa200\sl276\slmult1\lang9\f0\fs22 Sample License\par}" > ../LICENSE.rtf
-          }
+# Проверяем и создаем необходимые файлы
+if (-not (Test-Path "../LICENSE.rtf")) {
+    echo "{\rtf1\ansi\deff0{\fonttbl{\f0\fnil\fcharset0 Calibri;}}\viewkind4\uc1\pard\sa200\sl276\slmult1\lang9\f0\fs22 Sample License\par}" > ../LICENSE.rtf
+}
 
-          if (-not (Test-Path "../assets/icon.ico")) {
-              if (-not (Test-Path "../assets")) { mkdir ../assets }
-              magick -size 64x64 xc:white ../assets/icon.ico
-          }
+if (-not (Test-Path "../assets/icon.ico")) {
+    if (-not (Test-Path "../assets")) { mkdir ../assets }
+    magick -size 64x64 xc:white ../assets/icon.ico
+}
 
-          # Полная конфигурация WiX с исправленными параметрами
-          cmake .. `
-            -DCPACK_GENERATOR="WIX" `
-            -DCPACK_WIX_UPGRADE_GUID="$UPGRADE_GUID" `
-            -DCPACK_WIX_PRODUCT_GUID="$PRODUCT_GUID" `
-            -DCPACK_PACKAGE_NAME="Solver" `
-            -DCPACK_PACKAGE_VERSION="1.1.5" `  # Явная версия вместо "main"
-            -DCPACK_PACKAGE_VENDOR="Your Company" `
-            -DCPACK_RESOURCE_FILE_LICENSE=(Resolve-Path "../LICENSE.rtf") `
-            -DCPACK_WIX_PRODUCT_ICON=(Resolve-Path "../assets/icon.ico") `
-            -DCPACK_WIX_UI_REF="WixUI_Minimal" `
-            -DCPACK_WIX_ARCHITECTURE="x64" `
-            -DCPACK_WIX_CULTURES="en-us" `
-            -DCPACK_WIX_EXTENSIONS="WixUtilExtension" `
-            -DCPACK_PACKAGE_EXECUTABLES="solver;solver" `
-            -DCPACK_CREATE_DESKTOP_LINKS="solver" `
-            -DCPACK_WIX_TEMPLATE=(Resolve-Path "../cmake/WIX.template.in") `
-            -DCPACK_WIX_PROPERTY_ARPCOMMENTS="Solver application" `
-            -DCPACK_WIX_PROPERTY_ARPCONTACT="support@yourcompany.com" `
-            -DCPACK_WIX_PROPERTY_ARPHELPLINK="https://yourcompany.com/support" `
-            -DCPACK_WIX_PROPERTY_ARPURLINFOABOUT="https://yourcompany.com"
+# Полная конфигурация WiX с исправленными параметрами
+$cmakeArgs = @(
+    "..",
+    "-DCPACK_GENERATOR=WIX",
+    "-DCPACK_WIX_UPGRADE_GUID=$UPGRADE_GUID",
+    "-DCPACK_WIX_PRODUCT_GUID=$PRODUCT_GUID",
+    "-DCPACK_PACKAGE_NAME=Solver",
+    "-DCPACK_PACKAGE_VERSION=1.1.5",  # Явная версия вместо "main"
+    "-DCPACK_PACKAGE_VENDOR=`"Your Company`"",
+    "-DCPACK_RESOURCE_FILE_LICENSE=$(Resolve-Path "../LICENSE.rtf")",
+    "-DCPACK_WIX_PRODUCT_ICON=$(Resolve-Path "../assets/icon.ico")",
+    "-DCPACK_WIX_UI_REF=WixUI_Minimal",
+    "-DCPACK_WIX_ARCHITECTURE=x64",
+    "-DCPACK_WIX_CULTURES=en-us",
+    "-DCPACK_WIX_EXTENSIONS=WixUtilExtension",
+    "-DCPACK_PACKAGE_EXECUTABLES=solver;solver",
+    "-DCPACK_CREATE_DESKTOP_LINKS=solver",
+    "-DCPACK_WIX_TEMPLATE=$(Resolve-Path "../cmake/WIX.template.in")",
+    "-DCPACK_WIX_PROPERTY_ARPCOMMENTS=`"Solver application`"",
+    "-DCPACK_WIX_PROPERTY_ARPCONTACT=support@yourcompany.com",
+    "-DCPACK_WIX_PROPERTY_ARPHELPLINK=https://yourcompany.com/support",
+    "-DCPACK_WIX_PROPERTY_ARPURLINFOABOUT=https://yourcompany.com"
+)
 
-          # Сборка и установка
-          cmake --build . --config Release --target INSTALL
+cmake $cmakeArgs
 
-          # Создание пакета с подробным логом
-          $env:PATH = "$env:WIX_PATH;$env:PATH"
-          cpack -C Release --verbose 2>&1 | Tee-Object -FilePath "cpack.log"
+# Сборка и установка
+cmake --build . --config Release --target INSTALL
 
-          # Проверка результата
-          if (-not (Test-Path "*.msi")) {
-              Write-Host "##[error] MSI creation failed!"
-              Write-Host "CPack output:"
-              Get-Content "cpack.log"
+# Очистка предыдущих попыток упаковки
+Remove-Item -Path "_CPack_Packages" -Recurse -Force -ErrorAction SilentlyContinue
 
-              if (Test-Path "_CPack_Packages/win64/WIX/wix.log") {
-                  Write-Host "WiX log:"
-                  Get-Content "_CPack_Packages/win64/WIX/wix.log"
-              }
+# Создание пакета с подробным логом
+$env:PATH = "$env:WIX_PATH;$env:PATH"
+cpack -C Release --verbose 2>&1 | Tee-Object -FilePath "cpack.log"
 
-              exit 1
-          }
+# Проверка результата
+if (-not (Test-Path "*.msi")) {
+    Write-Host "##[error] MSI creation failed!"
+    Write-Host "CPack output:"
+    Get-Content "cpack.log"
 
-          # Создаем ZIP отдельно
-          $zipName = "Solver-$env:GITHUB_REF_NAME-Windows-x64.zip"
-          Compress-Archive -Path "../artifacts/binaries/*" -DestinationPath "../artifacts/packages/$zipName" -Force
+    if (Test-Path "_CPack_Packages/win64/WIX/wix.log") {
+        Write-Host "WiX log:"
+        Get-Content "_CPack_Packages/win64/WIX/wix.log"
+    }
 
-          Copy-Item -Path "*.msi" -Destination "../artifacts/packages/" -Force
+    exit 1
+}
+
+# Создаем ZIP отдельно
+$zipName = "Solver-$env:GITHUB_REF_NAME-Windows-x64.zip"
+Compress-Archive -Path "../artifacts/binaries/*" -DestinationPath "../artifacts/packages/$zipName" -Force
+
+Copy-Item -Path "*.msi" -Destination "../artifacts/packages/" -Force
 
       # Создание пакетов для Linux
       - name: Create Linux packages
