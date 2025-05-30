@@ -26,14 +26,12 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Общие настройки
       - name: Setup directories
         shell: bash
         run: |
           mkdir -p artifacts/packages
           mkdir -p artifacts/binaries
 
-      # Установка зависимостей для Windows
       - name: Install Windows dependencies
         if: runner.os == 'Windows'
         shell: powershell
@@ -49,40 +47,19 @@ jobs:
           refreshenv
           cmake --version
 
-      # Установка зависимостей для Linux
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake build-essential zip rpm uuid-runtime
-          cmake --version
-
-      # Установка зависимостей для macOS
-      - name: Install macOS dependencies
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          brew update
-          brew install --formula cmake
-          cmake --version
-
-      # Подготовка WiX (только Windows)
       - name: Prepare WiX assets
         if: runner.os == 'Windows'
         shell: bash
         run: |
           mkdir -p assets
-          # Минимальный файл лицензии RTF
+          # Создаем минимальные необходимые файлы
           echo "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fnil\\fcharset0 Calibri;}}\\viewkind4\\uc1\\pard\\sa200\\sl276\\slmult1\\lang9\\f0\\fs22 Sample License\\par}" > LICENSE.rtf
-          # Заглушка для иконки
-          echo "dummy" > assets/icon.ico
-          # Заглушки для изображений WiX
-          mkdir -p assets
-          echo "dummy" > assets/wix_banner.bmp
-          echo "dummy" > assets/wix_dialog.bmp
+          # Создаем заглушку для иконки (настоящую иконку лучше добавить в репозиторий)
+          convert -size 64x64 xc:white assets/icon.ico
+          # Создаем заглушки для изображений WiX
+          convert -size 493x58 xc:white assets/wix_banner.bmp
+          convert -size 493x312 xc:white assets/wix_dialog.bmp
 
-      # Конфигурация и сборка
       - name: Configure and Build
         shell: bash
         run: |
@@ -91,41 +68,63 @@ jobs:
           cmake .. -DCMAKE_BUILD_TYPE=Release
           cmake --build . --config Release --parallel 2
 
-      # Копирование бинарников
-      - name: Copy binaries
-        shell: bash
+      - name: Create Windows MSI package
+        if: runner.os == 'Windows'
+        shell: powershell
         run: |
-          case "$RUNNER_OS" in
-            Linux|macOS)
-              find build -name "solver" -type f -exec cp {} artifacts/binaries/ \;
-              ;;
-            Windows)
-              find build -name "solver.exe" -type f -exec cp {} artifacts/binaries/ \;
-              ;;
-          esac
+          cd build
 
-      # Создание пакетов
-      - name: Create packages
+          # Генерируем фиксированные GUID (важно использовать одинаковые для всех версий)
+          $UPGRADE_GUID = "PUT-YOUR-UPGRADE-GUID-HERE" # Замените на реальный GUID
+          $PRODUCT_GUID = [guid]::NewGuid().ToString().ToUpper()
+
+          # Переконфигурируем с настройками для WiX
+          cmake .. `
+            -DCPACK_GENERATOR="WIX" `
+            -DCPACK_WIX_UPGRADE_GUID="$UPGRADE_GUID" `
+            -DCPACK_WIX_PRODUCT_GUID="$PRODUCT_GUID" `
+            -DCPACK_PACKAGE_NAME="Solver" `
+            -DCPACK_PACKAGE_VERSION="${{ github.ref_name }}" `
+            -DCPACK_PACKAGE_VENDOR="Your Company" `
+            -DCPACK_RESOURCE_FILE_LICENSE="../LICENSE.rtf" `
+            -DCPACK_WIX_PRODUCT_ICON="../assets/icon.ico" `
+            -DCPACK_WIX_UI_REF="WixUI_Minimal" `
+            -DCPACK_WIX_ARCHITECTURE="x64" `
+            -DCPACK_WIX_EXTENSIONS="WixUtilExtension" `
+            -DCPACK_PACKAGE_EXECUTABLES="solver;solver" `
+            -DCPACK_CREATE_DESKTOP_LINKS="solver"
+
+          # Создаем MSI пакет
+          $env:PATH = "$env:WIX_PATH;$env:PATH"
+          cpack -G WIX -C Release --verbose 2>&1 | Tee-Object -FilePath "cpack.log"
+
+          if (-not (Test-Path "*.msi")) {
+              Write-Host "##[error] MSI creation failed!"
+              Write-Host "Last 50 lines of CPack output:"
+              Get-Content "cpack.log" -Tail 50
+              exit 1
+          }
+
+          Copy-Item -Path "*.msi" -Destination "../artifacts/packages/" -Force
+
+      # Остальные шаги (для Linux и macOS) остаются без изменений
+      - name: Create Linux packages
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           cd build
-          case "$RUNNER_OS" in
-            Linux)
-              cpack -G DEB -C Release && cp *.deb ../artifacts/packages/ || echo "DEB package failed"
-              cpack -G RPM -C Release && cp *.rpm ../artifacts/packages/ || echo "RPM package failed"
-              cpack -G TGZ -C Release && cp *.tar.gz ../artifacts/packages/ || echo "TGZ package failed"
-              ;;
-            Windows)
-              cpack -G WIX -C Release && cp *.msi ../artifacts/packages/ || echo "MSI package failed"
-              cpack -G ZIP -C Release && cp *.zip ../artifacts/packages/ || echo "ZIP package failed"
-              ;;
-            macOS)
-              cpack -G DragNDrop -C Release && cp *.dmg ../artifacts/packages/ || echo "DMG package failed"
-              cpack -G ZIP -C Release && cp *.zip ../artifacts/packages/ || echo "ZIP package failed"
-              ;;
-          esac
+          cpack -G DEB -C Release && cp *.deb ../artifacts/packages/ || echo "DEB package failed"
+          cpack -G RPM -C Release && cp *.rpm ../artifacts/packages/ || echo "RPM package failed"
+          cpack -G TGZ -C Release && cp *.tar.gz ../artifacts/packages/ || echo "TGZ package failed"
 
-      # Проверка артефактов
+      - name: Create macOS packages
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          cd build
+          cpack -G DragNDrop -C Release && cp *.dmg ../artifacts/packages/ || echo "DMG package failed"
+          cpack -G ZIP -C Release && cp *.zip ../artifacts/packages/ || echo "ZIP package failed"
+
       - name: Verify artifacts
         shell: bash
         run: |
@@ -136,7 +135,6 @@ jobs:
             exit 1
           fi
 
-      # Загрузка артефактов
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -145,7 +143,6 @@ jobs:
             artifacts/*
           retention-days: 7
 
-      # Создание релиза
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
