@@ -32,6 +32,7 @@ jobs:
         run: |
           mkdir -p artifacts/packages
           mkdir -p artifacts/binaries
+          mkdir -p cmake  # Создаем папку для WIX template
 
       # Установка зависимостей для Windows
       - name: Install Windows dependencies
@@ -69,33 +70,56 @@ jobs:
           brew install --formula cmake
           cmake --version
 
-      # Подготовка WiX (только Windows)
+      # Создание WIX template и ресурсов
       - name: Prepare WiX assets
-        if: runner.os == 'Windows'
-        shell: powershell
+        shell: bash
         run: |
+          # Создаем минимальный WIX template
+          mkdir -p cmake
+          cat << 'EOF' > cmake/WIX.template.in
+          <?xml version="1.0" encoding="UTF-8"?>
+          <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+            <Product Id="*" Name="$(var.PackageName)" Version="$(var.PackageVersion)" 
+                     Manufacturer="$(var.PackageVendor)" Language="1033">
+              <Package InstallerVersion="200" Compressed="yes" Comments="$(var.PackageComments)"
+                       InstallScope="perMachine"/>
+
+              <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+              <MediaTemplate EmbedCab="yes" />
+
+              <Feature Id="ProductFeature" Title="$(var.PackageName)" Level="1">
+                <ComponentGroupRef Id="ProductComponents" />
+              </Feature>
+            </Product>
+
+            <Fragment>
+              <Directory Id="TARGETDIR" Name="SourceDir">
+                <Directory Id="ProgramFilesFolder">
+                  <Directory Id="INSTALLFOLDER" Name="$(var.PackageName)" />
+                </Directory>
+              </Directory>
+            </Fragment>
+
+            <Fragment>
+              <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
+                <!-- Files will be added automatically by CPack -->
+              </ComponentGroup>
+            </Fragment>
+          </Wix>
+          EOF
+
+          # Создаем минимальные ресурсы, если их нет
           mkdir -p assets
-          # Минимальный файл лицензии RTF
-          if (-not (Test-Path "../LICENSE.rtf")) {
+          if [ ! -f LICENSE.rtf ]; then
               echo "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fnil\\fcharset0 Calibri;}}\\viewkind4\\uc1\\pard\\sa200\\sl276\\slmult1\\lang9\\f0\\fs22 Sample License\\par}" > LICENSE.rtf
-          } else {
-              Copy-Item -Path "../LICENSE.rtf" -Destination "./LICENSE.rtf" -Force
-          }
-          # Создаем заглушки для изображений, если их нет
-          if (-not (Test-Path "../assets/icon.ico")) {
-              magick -size 64x64 xc:white assets/icon.ico
-          } else {
-              if (-not (Test-Path "assets")) { mkdir assets }
-              Copy-Item -Path "../assets/icon.ico" -Destination "./assets/icon.ico" -Force
-          }
-          if (-not (Test-Path "../assets/wix_banner.bmp")) {
-              magick -size 493x58 xc:white assets/wix_banner.bmp
-          }
-          if (-not (Test-Path "../assets/wix_dialog.bmp")) {
-              magick -size 493x312 xc:white assets/wix_dialog.bmp
-          }
-          # Проверяем созданные файлы
-          Get-ChildItem assets
+          fi
+          if [ ! -f assets/icon.ico ]; then
+              if command -v magick >/dev/null 2>&1; then
+                  magick -size 64x64 xc:white assets/icon.ico
+              else
+                  echo "Warning: ImageMagick not available, cannot create icon.ico"
+              fi
+          fi
 
       # Конфигурация и сборка
       - name: Configure and Build
@@ -125,22 +149,12 @@ jobs:
         shell: powershell
         run: |
           cd build
+
           # Генерируем GUID (UPGRADE_GUID должен быть постоянным для всех версий)
           $UPGRADE_GUID = "5B5F3D7B-0F6E-4EAF-B6D1-2C9D3E4F5A6B" # Пример GUID, замените на свой постоянный
           $PRODUCT_GUID = [guid]::NewGuid().ToString().ToUpper()
 
-          # Проверяем существование необходимых файлов
-          if (-not (Test-Path "../LICENSE.rtf")) {
-              Write-Host "##[error] LICENSE.rtf not found!"
-              exit 1
-          }
-
-          if (-not (Test-Path "../assets/icon.ico")) {
-              Write-Host "##[error] icon.ico not found in assets directory!"
-              exit 1
-          }
-
-          # Полная конфигурация WiX с дополнительными параметрами
+          # Полная конфигурация WiX
           cmake .. `
             -DCPACK_GENERATOR="WIX;ZIP" `
             -DCPACK_WIX_UPGRADE_GUID="$UPGRADE_GUID" `
@@ -156,10 +170,10 @@ jobs:
             -DCPACK_WIX_EXTENSIONS="WixUtilExtension" `
             -DCPACK_PACKAGE_EXECUTABLES="solver;solver" `
             -DCPACK_CREATE_DESKTOP_LINKS="solver" `
-            -DCPACK_WIX_PROPERTY_ARPCOMMENTS="Solver application" `
-            -DCPACK_WIX_PROPERTY_ARPCONTACT="support@yourcompany.com" `
-            -DCPACK_WIX_PROPERTY_ARPHELPLINK="https://yourcompany.com/support" `
-            -DCPACK_WIX_PROPERTY_ARPURLINFOABOUT="https://yourcompany.com"
+            -DCPACK_WIX_TEMPLATE="../cmake/WIX.template.in"
+
+          # Пересобираем проект после изменения конфигурации
+          cmake --build . --config Release --target INSTALL
 
           # Создание пакетов
           $env:PATH = "$env:WIX_PATH;$env:PATH"
