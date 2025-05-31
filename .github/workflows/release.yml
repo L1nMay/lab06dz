@@ -1,271 +1,80 @@
-name: Release Pipeline
+name: Build and Release
 
 on:
   push:
-    branches: [main]
-    tags: ['v*.*.*']
-
-env:
-  ACTIONS_ALLOW_UNSECURE_COMMANDS: 'true'
-
-permissions:
-  contents: write
-  packages: write
+    tags:
+      - 'v*'  # Триггер только для тегов, начинающихся с 'v'
 
 jobs:
-  build:
+  build-package:
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-      fail-fast: false
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+        include:
+          - os: ubuntu-latest
+            cpack_generators: "DEB;RPM;TGZ"
+            artifact_name: linux-packages
+          - os: macos-latest
+            cpack_generators: "DragNDrop;ZIP"
+            artifact_name: macos-packages
+          - os: windows-latest
+            cpack_generators: "WIX;ZIP"
+            artifact_name: windows-packages
 
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+    - uses: actions/checkout@v3
 
-      # Общие настройки
-      - name: Setup directories
-        shell: bash
-        run: |
-          mkdir -p artifacts/packages
-          mkdir -p artifacts/binaries
-          mkdir -p cmake
+    - name: Install dependencies (Linux)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake rpm
 
-      # Установка зависимостей для Windows
-      - name: Install Windows dependencies
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          choco install wixtoolset -y --no-progress --force
-          choco install cmake -y --no-progress
-          choco install imagemagick -y --no-progress
-          $wixPath = "${env:ProgramFiles(x86)}\WiX Toolset v3.14\bin"
-          if (-not (Test-Path $wixPath)) {
-              $wixPath = "${env:ProgramFiles}\WiX Toolset v3.14\bin"
-          }
-          echo "WIX_PATH=$wixPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          echo "$wixPath" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          refreshenv
-          cmake --version
-          magick --version
+    - name: Configure CMake
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Release
 
-      # Установка зависимостей для Linux
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake build-essential zip rpm uuid-runtime
-          cmake --version
+    - name: Build
+      run: cmake --build build --config Release
 
-      # Установка зависимостей для macOS
-      - name: Install macOS dependencies
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          brew update
-          brew install --formula cmake
-          cmake --version
+    - name: Package
+      run: |
+        cd build
+        cpack -G "${{ matrix.cpack_generators }}"
 
-      # Подготовка WiX template и ресурсов
-      - name: Prepare WiX assets
-        shell: bash
-        run: |
-          # Создаем WIX template
-          cat << 'EOF' > cmake/WIX.template.in
-          <?xml version="1.0" encoding="UTF-8"?>
-          <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-            <Product Id="*" Name="$(var.PackageName)" Version="$(var.PackageVersion)" 
-                     Manufacturer="$(var.PackageVendor)" Language="1033">
-              <Package InstallerVersion="200" Compressed="yes" Comments="$(var.PackageComments)"
-                       InstallScope="perMachine"/>
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: ${{ matrix.artifact_name }}
+        path: |
+          build/*.deb
+          build/*.rpm
+          build/*.tar.gz
+          build/*.dmg
+          build/*.zip
+          build/*.msi
 
-              <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
-              <MediaTemplate EmbedCab="yes" />
+  create-release:
+    needs: build-package
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
 
-              <Feature Id="ProductFeature" Title="$(var.PackageName)" Level="1">
-                <ComponentGroupRef Id="ProductComponents" />
-              </Feature>
-            </Product>
-
-            <Fragment>
-              <Directory Id="TARGETDIR" Name="SourceDir">
-                <Directory Id="ProgramFilesFolder">
-                  <Directory Id="INSTALLFOLDER" Name="$(var.PackageName)" />
-                </Directory>
-              </Directory>
-            </Fragment>
-
-            <Fragment>
-              <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
-                <!-- Files will be added automatically by CPack -->
-              </ComponentGroup>
-            </Fragment>
-          </Wix>
-          EOF
-
-          # Создаем минимальные ресурсы, если их нет
-          mkdir -p assets
-          if [ ! -f LICENSE.rtf ]; then
-              echo "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fnil\\fcharset0 Calibri;}}\\viewkind4\\uc1\\pard\\sa200\\sl276\\slmult1\\lang9\\f0\\fs22 Sample License\\par}" > LICENSE.rtf
-          fi
-          if [ ! -f assets/icon.ico ]; then
-              if command -v magick >/dev/null 2>&1; then
-                  magick -size 64x64 xc:white assets/icon.ico
-              else
-                  echo "Warning: ImageMagick not available, cannot create icon.ico"
-              fi
-          fi
-
-      # Конфигурация и сборка
-      - name: Configure and Build
-        shell: bash
-        run: |
-          mkdir -p build
-          cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release
-          cmake --build . --config Release --parallel 2
-
-      # Копирование бинарников
-      - name: Copy binaries
-        shell: bash
-        run: |
-          case "$RUNNER_OS" in
-            Linux|macOS)
-              find build -name "solver" -type f -exec cp {} artifacts/binaries/ \;
-              ;;
-            Windows)
-              find build -name "solver.exe" -type f -exec cp {} artifacts/binaries/ \;
-              ;;
-          esac
-
-      # Создание пакетов для Windows
-      - name: Create Windows packages
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          # Проверяем установку WiX
-          Write-Host "Checking WiX installation..."
-          where candle
-          where light
-
-          cd build
-
-          # Генерируем GUID (UPGRADE_GUID должен быть постоянным)
-          $UPGRADE_GUID = "5B5F3D7B-0F6E-4EAF-B6D1-2C9D3E4F5A6B"
-          $PRODUCT_GUID = [guid]::NewGuid().ToString().ToUpper()
-
-          # Полная конфигурация WiX с исправленными параметрами
-          $cmakeArgs = @(
-            "..",
-            "-DCPACK_GENERATOR=WIX",
-            "-DCPACK_WIX_UPGRADE_GUID=$UPGRADE_GUID",
-            "-DCPACK_WIX_PRODUCT_GUID=$PRODUCT_GUID",
-            "-DCPACK_PACKAGE_NAME=Solver",
-            "-DCPACK_PACKAGE_VERSION=$env:GITHUB_REF_NAME",
-            "-DCPACK_PACKAGE_VENDOR=`"Your Company`"",
-            "-DCPACK_RESOURCE_FILE_LICENSE=$(Resolve-Path "../LICENSE.rtf")",
-            "-DCPACK_WIX_PRODUCT_ICON=$(Resolve-Path "../assets/icon.ico")",
-            "-DCPACK_WIX_UI_REF=WixUI_Minimal",
-            "-DCPACK_WIX_ARCHITECTURE=x64",
-            "-DCPACK_WIX_CULTURES=en-us",
-            "-DCPACK_WIX_EXTENSIONS=WixUtilExtension",
-            "-DCPACK_PACKAGE_EXECUTABLES=solver;solver",
-            "-DCPACK_CREATE_DESKTOP_LINKS=solver",
-            "-DCPACK_WIX_TEMPLATE=$(Resolve-Path "../cmake/WIX.template.in")",
-            "-DCPACK_WIX_PROPERTY_ARPCOMMENTS=`"Solver application`"",
-            "-DCPACK_WIX_PROPERTY_ARPCONTACT=support@yourcompany.com",
-            "-DCPACK_WIX_PROPERTY_ARPHELPLINK=https://yourcompany.com/support",
-            "-DCPACK_WIX_PROPERTY_ARPURLINFOABOUT=https://yourcompany.com"
-          )
-
-          cmake $cmakeArgs
-
-          # Сборка и установка
-          cmake --build . --config Release --target INSTALL
-
-          # Очистка предыдущих попыток упаковки
-          Remove-Item -Path "_CPack_Packages" -Recurse -Force -ErrorAction SilentlyContinue
-
-          # Создание пакета с подробным логом
-          $env:PATH = "$env:WIX_PATH;$env:PATH"
-          cpack -C Release --verbose 2>&1 | Tee-Object -FilePath "cpack.log"
-
-          # Проверка результата
-          if (-not (Test-Path "*.msi")) {
-              Write-Host "##[error] MSI creation failed!"
-              Write-Host "CPack output:"
-              Get-Content "cpack.log"
-
-              if (Test-Path "_CPack_Packages/win64/WIX/wix.log") {
-                  Write-Host "WiX log:"
-                  Get-Content "_CPack_Packages/win64/WIX/wix.log"
-              }
-
-              exit 1
-          }
-
-          # Создаем ZIP отдельно
-          $zipName = "Solver-$env:GITHUB_REF_NAME-Windows-x64.zip"
-          Compress-Archive -Path "../artifacts/binaries/*" -DestinationPath "../artifacts/packages/$zipName" -Force
-
-          Copy-Item -Path "*.msi" -Destination "../artifacts/packages/" -Force
-
-      # Создание пакетов для Linux
-      - name: Create Linux packages
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          cd build
-          cpack -G DEB -C Release && cp *.deb ../artifacts/packages/ || echo "DEB package failed"
-          cpack -G RPM -C Release && cp *.rpm ../artifacts/packages/ || echo "RPM package failed"
-          cpack -G TGZ -C Release && cp *.tar.gz ../artifacts/packages/ || echo "TGZ package failed"
-          cpack -G ZIP -C Release && cp *.zip ../artifacts/packages/ || echo "ZIP package failed"
-
-      # Создание пакетов для macOS
-      - name: Create macOS packages
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          cd build
-          cpack -G DragNDrop -C Release && cp *.dmg ../artifacts/packages/ || echo "DMG package failed"
-          cpack -G ZIP -C Release && cp *.zip ../artifacts/packages/ || echo "ZIP package failed"
-          cpack -G TGZ -C Release && cp *.tar.gz ../artifacts/packages/ || echo "TGZ package failed"
-
-      # Проверка артефактов
-      - name: Verify artifacts
-        shell: bash
-        run: |
-          echo "Artifacts contents:"
-          ls -lhR artifacts/
-          if [ -z "$(ls -A artifacts/packages/ 2>/dev/null)" ]; then
-            echo "##[error] No packages created!"
-            exit 1
-          fi
-
-      # Загрузка артефактов
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: Solver-${{ runner.os }}
-          path: |
-            artifacts/*
-          retention-days: 7
-
-      # Создание релиза
-      - name: Create Release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: Solver ${{ github.ref_name }}
-          files: |
-            artifacts/packages/*
-            artifacts/binaries/*
-          draft: false
-          prerelease: false
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ github.ref }}
+        release_name: Release ${{ github.ref_name }}
+        body: |
+          Automated release for version ${{ github.ref_name }}
+          Includes packages for:
+          - Linux (.deb, .rpm, .tar.gz)
+          - macOS (.dmg, .zip)
+          - Windows (.msi, .zip)
+        files: |
+          linux-packages/*
+          macos-packages/*
+          windows-packages/*
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

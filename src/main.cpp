@@ -24,7 +24,12 @@ std::string solve_equation(double a, double b, double c) {
 int main() {
     double a, b, c;
     std::cout << "Enter coefficients a, b, c: ";
-    std::cin >> a >> b >> c;
+
+    if (!(std::cin >> a >> b >> c)) {
+        std::cerr << "Invalid input. Please enter numbers." << std::endl;
+        return 1;
+    }
+
     std::cout << solve_equation(a, b, c) << std::endl;
     return 0;
 }
