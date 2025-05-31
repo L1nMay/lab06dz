@@ -3,7 +3,7 @@ name: Build and Release
 on:
   push:
     tags:
-      - 'v*'  # Триггер только для тегов, начинающихся с 'v'
+      - 'v*'
 
 jobs:
   build-package:
@@ -23,13 +23,16 @@ jobs:
             artifact_name: windows-packages
 
     steps:
-    - uses: actions/checkout@v4  # Обновлено с v3 до v4
+    - uses: actions/checkout@v4
 
-    - name: Install dependencies (Linux)
-      if: matrix.os == 'ubuntu-latest'
+    - name: Install dependencies
       run: |
-        sudo apt-get update
-        sudo apt-get install -y cmake rpm
+        if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
+          sudo apt-get update
+          sudo apt-get install -y cmake rpm
+        elif [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+          choco install wixtoolset -y
+        fi
 
     - name: Configure CMake
       run: cmake -B build -DCMAKE_BUILD_TYPE=Release
@@ -37,13 +40,21 @@ jobs:
     - name: Build
       run: cmake --build build --config Release
 
+    - name: Prepare package metadata
+      run: |
+        echo "CPACK_PACKAGE_CONTACT=maintainer@example.com" >> $GITHUB_ENV
+        echo "CPACK_DEBIAN_PACKAGE_MAINTAINER=Maintainer Name <maintainer@example.com>" >> $GITHUB_ENV
+        echo "CPACK_DEBIAN_PACKAGE_DEPENDS=libc6 (>= 2.14)" >> $GITHUB_ENV
+        echo "CPACK_WIX_UPGRADE_GUID=59C3599E-9B55-493D-930C-43AAA0A67E7F" >> $GITHUB_ENV
+        echo "CPACK_WIX_PRODUCT_GUID=89D3599E-9B55-493D-930C-43AAA0A67E8F" >> $GITHUB_ENV
+
     - name: Package
       run: |
         cd build
         cpack -G "${{ matrix.cpack_generators }}"
 
     - name: Upload artifacts
-      uses: actions/upload-artifact@v4  # Обновлено с v3 до v4
+      uses: actions/upload-artifact@v4
       with:
         name: ${{ matrix.artifact_name }}
         path: |
@@ -59,10 +70,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Download all artifacts
-      uses: actions/download-artifact@v4  # Обновлено с v3 до v4
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
 
     - name: Create GitHub Release
-      uses: softprops/action-gh-release@v2  # Обновлено с v1 до v2
+      uses: softprops/action-gh-release@v2
       with:
         tag_name: ${{ github.ref }}
         release_name: Release ${{ github.ref_name }}
@@ -73,8 +86,8 @@ jobs:
           - macOS (.dmg, .zip)
           - Windows (.msi, .zip)
         files: |
-          linux-packages/*
-          macos-packages/*
-          windows-packages/*
+          artifacts/linux-packages/*
+          artifacts/macos-packages/*
+          artifacts/windows-packages/*
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

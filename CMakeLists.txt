@@ -37,6 +37,18 @@ install(TARGETS solver
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib
 )
+# Дополнительные настройки для DEB пакетов
+set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Maintainer Name <maintainer@example.com>")
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "libc6 (>= 2.14)")
+set(CPACK_DEBIAN_PACKAGE_HOMEPAGE "https://github.com/your/repo")
+
+# Дополнительные настройки для WIX (Windows)
+set(CPACK_WIX_UPGRADE_GUID "59C3599E-9B55-493D-930C-43AAA0A67E7F")
+set(CPACK_WIX_PRODUCT_GUID "89D3599E-9B55-493D-930C-43AAA0A67E8F")
+set(CPACK_WIX_UPGRADE_CODE "B5D3599E-9B55-493D-930C-43AAA0A67E9F")
+
+# Настройки для RPM пакетов
+set(CPACK_RPM_PACKAGE_REQUIRES "libc >= 2.14")
 
 # Настройки CPack
 include(CPack)
