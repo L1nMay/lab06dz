@@ -23,7 +23,7 @@ jobs:
             artifact_name: windows-packages
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4  # Обновлено с v3 до v4
 
     - name: Install dependencies (Linux)
       if: matrix.os == 'ubuntu-latest'
@@ -43,7 +43,7 @@ jobs:
         cpack -G "${{ matrix.cpack_generators }}"
 
     - name: Upload artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4  # Обновлено с v3 до v4
       with:
         name: ${{ matrix.artifact_name }}
         path: |
@@ -59,10 +59,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Download all artifacts
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4  # Обновлено с v3 до v4
 
     - name: Create GitHub Release
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2  # Обновлено с v1 до v2
       with:
         tag_name: ${{ github.ref }}
         release_name: Release ${{ github.ref_name }}
