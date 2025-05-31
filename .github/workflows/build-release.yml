@@ -26,12 +26,13 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Install dependencies
+      shell: bash
       run: |
         if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
           sudo apt-get update
           sudo apt-get install -y cmake rpm
         elif [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-          choco install wixtoolset -y
+          choco install wixtoolset -y --no-progress
         fi
 
     - name: Configure CMake
