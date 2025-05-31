@@ -79,7 +79,7 @@ jobs:
       uses: softprops/action-gh-release@v2
       with:
         tag_name: ${{ github.ref }}
-        release_name: Release ${{ github.ref_name }}
+        name: Release ${{ github.ref_name }}
         body: |
           Automated release for version ${{ github.ref_name }}
           Includes packages for:
@@ -90,5 +90,7 @@ jobs:
           artifacts/linux-packages/*
           artifacts/macos-packages/*
           artifacts/windows-packages/*
+        draft: false
+        prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
