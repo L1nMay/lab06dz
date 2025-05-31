@@ -75,10 +75,10 @@ jobs:
       with:
         path: artifacts
 
-    - name: Create GitHub Release
-      uses: softprops/action-gh-release@v2
+    - name: Create Release
+      uses: ncipollo/release-action@v1
       with:
-        tag_name: ${{ github.ref }}
+        tag: ${{ github.ref_name }}
         name: Release ${{ github.ref_name }}
         body: |
           Automated release for version ${{ github.ref_name }}
@@ -86,11 +86,5 @@ jobs:
           - Linux (.deb, .rpm, .tar.gz)
           - macOS (.dmg, .zip)
           - Windows (.msi, .zip)
-        files: |
-          artifacts/linux-packages/*
-          artifacts/macos-packages/*
-          artifacts/windows-packages/*
-        draft: false
-        prerelease: false
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        artifacts: "artifacts/*/*"
+        token: ${{ secrets.PAT_TOKEN }}
